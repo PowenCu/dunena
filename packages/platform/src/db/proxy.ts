@@ -6,6 +6,8 @@
 // result caching and tag-based invalidation.
 
 import type { QueryCacheService } from "./query-cache";
+import { WriteBehindBuffer } from "./write-behind-buffer";
+import type { WriteBehindConfig, WriteBehindStats } from "./write-behind-buffer";
 import { logger } from "../utils/logger";
 
 const log = logger.child("db-proxy");
@@ -287,9 +289,20 @@ function createConnector(config: DatabaseConnectorConfig): AnyConnectorExtended 
 export class DatabaseProxy {
   private connectors = new Map<string, { connector: AnyConnector; config: DatabaseConnectorConfig }>();
   private queryCache: QueryCacheService;
+  private writeBehindBuffer: WriteBehindBuffer | null = null;
+  private writeBehindEnabled: boolean = false;
 
-  constructor(queryCache: QueryCacheService) {
+  constructor(queryCache: QueryCacheService, writeBehindConfig?: WriteBehindConfig) {
     this.queryCache = queryCache;
+
+    if (writeBehindConfig?.enabled) {
+      this.writeBehindBuffer = new WriteBehindBuffer(
+        writeBehindConfig,
+        (connectorName, query, params) => this.executeRaw(connectorName, query, params),
+      );
+      this.writeBehindEnabled = true;
+      log.info("Write-behind mode enabled for database proxy");
+    }
   }
 
   /**
@@ -351,6 +364,20 @@ export class DatabaseProxy {
 
     // Execute the real query
     const start = performance.now();
+
+    // Route mutations through write-behind buffer if enabled
+    if (this.writeBehindEnabled && this.writeBehindBuffer && this.isMutation(request.query)) {
+      this.writeBehindBuffer.add(request.connector, request.query, request.params);
+      const durationMs = performance.now() - start;
+      return {
+        data: { buffered: true, message: "Write queued for async execution" },
+        cached: false,
+        connector: request.connector,
+        durationMs,
+        cacheKey,
+      };
+    }
+
     const data = await connector.execute(request.query, request.params);
     const durationMs = performance.now() - start;
 
@@ -408,5 +435,57 @@ export class DatabaseProxy {
            upper.startsWith("ALTER") ||
            upper.startsWith("CREATE") ||
            upper.startsWith("TRUNCATE");
+  }
+
+  // ── Write-Behind Lifecycle ─────────────────────────────
+
+  /**
+   * Execute a query directly against a connector (bypassing cache).
+   * Used as the executeFn callback for the WriteBehindBuffer.
+   */
+  private async executeRaw(connectorName: string, query: string, params?: unknown[]): Promise<unknown> {
+    const entry = this.connectors.get(connectorName);
+    if (!entry) {
+      throw new Error(`Unknown connector: "${connectorName}"`);
+    }
+    return entry.connector.execute(query, params);
+  }
+
+  /**
+   * Start the write-behind flush interval.
+   */
+  startWriteBehind(): void {
+    this.writeBehindBuffer?.start();
+  }
+
+  /**
+   * Stop the write-behind buffer and perform a final flush.
+   */
+  async stopWriteBehind(): Promise<void> {
+    await this.writeBehindBuffer?.stop();
+  }
+
+  /**
+   * Get write-behind buffer statistics.
+   * Returns null if write-behind is not configured.
+   */
+  getBufferStats(): WriteBehindStats | null {
+    return this.writeBehindBuffer?.getStats() ?? null;
+  }
+
+  /**
+   * Force-flush all pending write-behind entries.
+   * Returns null if write-behind is not configured.
+   */
+  async flushBuffer(): Promise<{ flushed: number; failed: number } | null> {
+    if (!this.writeBehindBuffer) return null;
+    return this.writeBehindBuffer.flush();
+  }
+
+  /**
+   * Whether write-behind mode is currently enabled.
+   */
+  isWriteBehindEnabled(): boolean {
+    return this.writeBehindEnabled;
   }
 }

@@ -10,7 +10,29 @@
 // - Switchable eviction policy (LRU / LFU)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+
+fn nanoTimestamp() i128 {
+    if (builtin.os.tag == .windows) {
+        const windows = std.os.windows;
+        const KERNEL32 = struct {
+            extern "kernel32" fn GetSystemTimeAsFileTime(lpFileTime: *windows.FILETIME) callconv(.winapi) void;
+        };
+        var ft: windows.FILETIME = undefined;
+        KERNEL32.GetSystemTimeAsFileTime(&ft);
+        const file_time = (@as(u64, ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+        const epoch_100ns = file_time -% 116444736000000000;
+        return @as(i128, epoch_100ns) * 100;
+    } else {
+        var ts: std.posix.timespec = undefined;
+        std.posix.clock_gettime(std.posix.CLOCK.REALTIME, &ts) catch {
+            return 0;
+        };
+        return @as(i128, ts.tv_sec) * 1_000_000_000 + ts.tv_nsec;
+    }
+}
+
 
 pub const EvictionPolicy = enum(u8) {
     lru = 0, // Least Recently Used (default)
@@ -101,7 +123,7 @@ pub const Cache = struct {
         entry.* = .{
             .key = key_copy,
             .value = val_copy,
-            .created_at_ns = std.time.nanoTimestamp(),
+            .created_at_ns = nanoTimestamp(),
             .version = 1,
             .access_count = 1,
         };

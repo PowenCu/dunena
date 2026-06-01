@@ -1,0 +1,1932 @@
+openapi: 3.0.3
+info:
+  title: Dunena Cache Engine API
+  version: 0.4.0
+  description: "High-performance cache engine with Zig core, Bun/TypeScript control layer, SQLite persistence, distributed locks, replication, and database proxying."
+  contact:
+    name: Dunena
+    url: "https://github.com/powencu/dunena"
+  license:
+    name: MIT
+    url: "https://opensource.org/licenses/MIT"
+servers:
+  - url: "http://localhost:3000"
+    description: Local development server
+tags:
+  - name: Health
+    description: Health checks and diagnostics
+  - name: Cache
+    description: Core cache CRUD and operations
+  - name: Batch
+    description: Batch cache operations (mget/mset/mdelete)
+  - name: Atomic
+    description: Atomic increment/decrement operations
+  - name: CAS
+    description: Compare-and-swap operations
+  - name: TTL
+    description: TTL inspection and modification
+  - name: Management
+    description: "Cache stats, flush, and snapshots"
+  - name: Database
+    description: SQLite key-value storage
+  - name: QueryCache
+    description: Query result caching layer
+  - name: Proxy
+    description: Database proxy connectors
+  - name: Locks
+    description: Distributed lock management
+  - name: Replication
+    description: Data replication across nodes
+  - name: RateLimits
+    description: Namespace-scoped rate limiting
+  - name: Metrics
+    description: Prometheus metrics export
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: API authentication via Bearer token. Health endpoints are exempt.
+  parameters:
+    KeyPath:
+      name: key
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Cache key
+    NamespaceQuery:
+      name: ns
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Namespace
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: ["error"]
+    CacheEntry:
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: string
+    CacheSetRequest:
+      type: object
+      required: ["value"]
+      properties:
+        value:
+          type: string
+          description: Value to store
+        ttl:
+          type: number
+          description: TTL in seconds (optional)
+        ns:
+          type: string
+          description: Namespace (optional)
+    BatchMgetRequest:
+      type: object
+      required: ["action", "keys"]
+      properties:
+        action:
+          type: string
+          enum: ["mget"]
+        keys:
+          type: array
+          items:
+            type: string
+        ns:
+          type: string
+    BatchMsetRequest:
+      type: object
+      required: ["action", "entries"]
+      properties:
+        action:
+          type: string
+          enum: ["mset"]
+        entries:
+          type: array
+          items:
+            type: object
+            required: ["key", "value"]
+            properties:
+              key:
+                type: string
+              value:
+                type: string
+              ttl:
+                type: number
+        ns:
+          type: string
+    BatchMdeleteRequest:
+      type: object
+      required: ["action", "keys"]
+      properties:
+        action:
+          type: string
+          enum: ["mdelete"]
+        keys:
+          type: array
+          items:
+            type: string
+        ns:
+          type: string
+    IncrDecrRequest:
+      type: object
+      properties:
+        delta:
+          type: number
+          description: "Amount to increment/decrement (default: 1)"
+        ns:
+          type: string
+    CASRequest:
+      type: object
+      required: ["value", "expectedVersion"]
+      properties:
+        value:
+          type: string
+        expectedVersion:
+          type: number
+          description: Expected current version for optimistic locking
+        ns:
+          type: string
+    TouchRequest:
+      type: object
+      required: ["ttl"]
+      properties:
+        ttl:
+          type: number
+          description: New TTL in seconds
+        ns:
+          type: string
+    WarmupRequest:
+      type: object
+      required: ["entries"]
+      properties:
+        entries:
+          type: array
+          items:
+            type: object
+            required: ["key", "value"]
+            properties:
+              key:
+                type: string
+              value:
+                type: string
+              ttl:
+                type: number
+              ns:
+                type: string
+    DbSetRequest:
+      type: object
+      required: ["value"]
+      properties:
+        value:
+          type: string
+        ttl:
+          type: number
+        ns:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+    DbBatchRequest:
+      type: object
+      required: ["action"]
+      properties:
+        action:
+          type: string
+          enum: ["mget", "mset", "mdelete", "query", "deleteByTags"]
+        keys:
+          type: array
+          items:
+            type: string
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              value:
+                type: string
+              ttl:
+                type: number
+              tags:
+                type: array
+                items:
+                  type: string
+        ns:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        pattern:
+          type: string
+        limit:
+          type: integer
+        offset:
+          type: integer
+        orderBy:
+          type: string
+          enum: ["key", "createdAt", "updatedAt"]
+        order:
+          type: string
+          enum: ["asc", "desc"]
+    QueryCacheStoreRequest:
+      type: object
+      required: ["key", "data"]
+      properties:
+        key:
+          type: string
+        data:
+          description: Query result data (any JSON)
+        ttl:
+          type: number
+        tags:
+          type: array
+          items:
+            type: string
+    QueryCacheInvalidateRequest:
+      type: object
+      properties:
+        key:
+          type: string
+          description: Specific cache key to invalidate
+        tags:
+          type: array
+          items:
+            type: string
+          description: Tags to invalidate by
+    ConnectorConfig:
+      type: object
+      required: ["name", "type", "connectionString"]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum:
+            - postgresql
+            - mysql
+            - http
+            - mongodb
+            - redis
+            - elasticsearch
+        connectionString:
+          type: string
+    ProxyQueryRequest:
+      type: object
+      required: ["connector", "query"]
+      properties:
+        connector:
+          type: string
+          description: Name of the registered connector
+        query:
+          type: string
+          description: Query or URL to execute
+        params:
+          type: array
+          description: Query parameters
+        cacheTTL:
+          type: number
+          description: Cache TTL for the result
+        tags:
+          type: array
+          items:
+            type: string
+    LockAcquireRequest:
+      type: object
+      required: ["owner"]
+      properties:
+        owner:
+          type: string
+          description: Lock owner identifier
+        ttl:
+          type: number
+          description: Lock TTL in seconds
+    LockReleaseRequest:
+      type: object
+      required: ["owner"]
+      properties:
+        owner:
+          type: string
+    LockExtendRequest:
+      type: object
+      required: ["owner", "ttl"]
+      properties:
+        owner:
+          type: string
+        ttl:
+          type: number
+          description: New TTL in seconds (must be positive)
+    ReplicaConfig:
+      type: object
+      required: ["id", "url"]
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+          format: uri
+        authToken:
+          type: string
+        enabled:
+          type: boolean
+          default: true
+        syncMode:
+          type: string
+          enum: ["async", "sync"]
+          default: async
+    RateLimitConfig:
+      type: object
+      required: ["namespace", "maxRequests", "windowMs"]
+      properties:
+        namespace:
+          type: string
+        maxRequests:
+          type: number
+          description: Max requests per window
+        windowMs:
+          type: number
+          description: Window duration in milliseconds
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        version:
+          type: string
+        uptime:
+          type: number
+        checks:
+          type: object
+          properties:
+            zigCore:
+              type: object
+              properties:
+                status:
+                  type: string
+                latencyMs:
+                  type: number
+            sqlite:
+              type: object
+              properties:
+                status:
+                  type: string
+                latencyMs:
+                  type: number
+            memory:
+              type: object
+              properties:
+                status:
+                  type: string
+                heapUsedMB:
+                  type: number
+                heapTotalMB:
+                  type: number
+                rssMB:
+                  type: number
+            cache:
+              type: object
+              properties:
+                status:
+                  type: string
+                entries:
+                  type: integer
+                maxEntries:
+                  type: integer
+                hitRate:
+                  type: number
+                memoryBytes:
+                  type: integer
+        timestamp:
+          type: string
+          format: date-time
+    CacheStats:
+      type: object
+      properties:
+        cache:
+          type: object
+          properties:
+            hits:
+              type: integer
+            misses:
+              type: integer
+            puts:
+              type: integer
+            deletes:
+              type: integer
+            evictions:
+              type: integer
+            currentSize:
+              type: integer
+            maxSize:
+              type: integer
+            hitRate:
+              type: number
+            memoryBytes:
+              type: integer
+            casHits:
+              type: integer
+            casMisses:
+              type: integer
+        latency:
+          type: object
+          properties:
+            mean:
+              type: number
+            p50:
+              type: number
+            p95:
+              type: number
+            p99:
+              type: number
+            count:
+              type: integer
+    CacheInfo:
+      type: object
+      properties:
+        evictionPolicy:
+          type: string
+        memoryBytes:
+          type: integer
+        casHits:
+          type: integer
+        casMisses:
+          type: integer
+        currentSize:
+          type: integer
+        maxSize:
+          type: integer
+    ServerInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        entries:
+          type: integer
+        uptime:
+          type: number
+        database:
+          type: boolean
+security:
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: ["Health"]
+      summary: Full health diagnostics
+      description: "Returns structured health information including Zig core latency, SQLite status, memory usage, and cache statistics."
+      security: []
+      responses:
+        200:
+          description: Health check passed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /health/live:
+    get:
+      tags: ["Health"]
+      summary: Kubernetes liveness probe
+      description: Returns 200 if the process is alive. Used for K8s liveness checks.
+      security: []
+      responses:
+        200:
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: alive
+  /health/ready:
+    get:
+      tags: ["Health"]
+      summary: Kubernetes readiness probe
+      description: Verifies the server is ready to accept traffic. Checks SQLite connectivity when database is enabled.
+      security: []
+      responses:
+        200:
+          description: Server is ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+        503:
+          description: Server not ready (e.g. SQLite unavailable)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /info:
+    get:
+      tags: ["Health"]
+      summary: Server information
+      description: "Returns basic server information including version, entry count, uptime, and database status."
+      responses:
+        200:
+          description: Server info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerInfo"
+  /metrics:
+    get:
+      tags: ["Metrics"]
+      summary: Prometheus metrics
+      description: Exposes cache and server metrics in Prometheus text exposition format.
+      responses:
+        200:
+          description: Prometheus metrics in text format
+          content:
+            text/plain:
+              schema:
+                type: string
+  "/cache/{key}":
+    get:
+      tags: ["Cache"]
+      summary: Get cache entry
+      description: Retrieves a value by key from the in-memory cache.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+        - $ref: "#/components/parameters/NamespaceQuery"
+
+      responses:
+        200:
+          description: Cache hit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CacheEntry"
+        400:
+          description: Invalid key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        404:
+          description: Key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags: ["Cache"]
+      summary: Set cache entry
+      description: Stores a key-value pair in the in-memory cache with optional TTL and namespace.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+        - $ref: "#/components/parameters/NamespaceQuery"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CacheSetRequest"
+      responses:
+        201:
+          description: Entry stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: ["Cache"]
+      summary: Delete cache entry
+      description: Removes a key from the in-memory cache.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+        - $ref: "#/components/parameters/NamespaceQuery"
+
+      responses:
+        200:
+          description: Entry deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+        400:
+          description: Invalid key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /cache:
+    post:
+      tags: ["Batch"]
+      summary: Batch cache operations
+      description: Perform bulk mget or mset operations on the cache.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/BatchMgetRequest"
+
+                - $ref: "#/components/schemas/BatchMsetRequest"
+
+      responses:
+        200:
+          description: Batch result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: object
+                    description: Map of key to value (mget)
+                  stored:
+                    type: integer
+                    description: Number of entries stored (mset)
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/cache/{key}/incr":
+    post:
+      tags: ["Atomic"]
+      summary: Atomic increment
+      description: Atomically increments a numeric cache value. Creates the key with value 0 + delta if it does not exist.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IncrDecrRequest"
+      responses:
+        200:
+          description: Incremented value
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: number
+        400:
+          description: Value is not numeric
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/cache/{key}/decr":
+    post:
+      tags: ["Atomic"]
+      summary: Atomic decrement
+      description: Atomically decrements a numeric cache value. Creates the key with value 0 - delta if it does not exist.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IncrDecrRequest"
+      responses:
+        200:
+          description: Decremented value
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: number
+        400:
+          description: Value is not numeric
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/cache/{key}/version":
+    get:
+      tags: ["CAS"]
+      summary: Get CAS version
+      description: Returns the current version number of a cache entry for use in compare-and-swap operations.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+        - $ref: "#/components/parameters/NamespaceQuery"
+
+      responses:
+        200:
+          description: Version info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+                  version:
+                    type: integer
+        404:
+          description: Key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/cache/{key}/cas":
+    put:
+      tags: ["CAS"]
+      summary: Compare-and-swap update
+      description: Updates a cache entry only if the current version matches the expected version. Provides optimistic concurrency control.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+        - $ref: "#/components/parameters/NamespaceQuery"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CASRequest"
+      responses:
+        200:
+          description: CAS succeeded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  newVersion:
+                    type: integer
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        409:
+          description: Version conflict
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+  "/cache/{key}/ttl":
+    get:
+      tags: ["TTL"]
+      summary: Get TTL
+      description: "Returns the remaining TTL for a cache entry. Returns -1 for entries without expiry, -2 if key not found."
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+        - $ref: "#/components/parameters/NamespaceQuery"
+
+      responses:
+        200:
+          description: TTL info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+                  ttl:
+                    type: number
+                    description: "Remaining TTL in seconds, or -1 for no expiry"
+                  hasExpiry:
+                    type: boolean
+        404:
+          description: Key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/cache/{key}/touch":
+    post:
+      tags: ["TTL"]
+      summary: Update TTL
+      description: Sets a new TTL on an existing cache entry without changing its value.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+        - $ref: "#/components/parameters/NamespaceQuery"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TouchRequest"
+      responses:
+        200:
+          description: TTL updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  ttl:
+                    type: number
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        404:
+          description: Key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /cache/warmup:
+    post:
+      tags: ["Cache"]
+      summary: Bulk warmup
+      description: Loads multiple entries into the cache at once. Useful for pre-populating the cache on startup.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WarmupRequest"
+      responses:
+        200:
+          description: Warmup result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  loaded:
+                    type: integer
+                  failed:
+                    type: integer
+                  total:
+                    type: integer
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /cache/info:
+    get:
+      tags: ["Cache"]
+      summary: Cache info
+      description: "Returns cache configuration and status including eviction policy, memory usage, and CAS statistics."
+      responses:
+        200:
+          description: Cache info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CacheInfo"
+  /keys:
+    get:
+      tags: ["Cache"]
+      summary: Scan keys
+      description: Iterates over cache keys matching a glob pattern with cursor-based pagination.
+      parameters:
+        - name: pattern
+          in: query
+          schema:
+            type: string
+            default: "*"
+          description: Glob pattern to match keys
+        - $ref: "#/components/parameters/NamespaceQuery"
+
+        - name: cursor
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Cursor for pagination
+        - name: count
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+          description: Max keys per page
+      responses:
+        200:
+          description: Scan result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: string
+                  cursor:
+                    type: integer
+                  hasMore:
+                    type: boolean
+  /stats:
+    get:
+      tags: ["Management"]
+      summary: Cache statistics
+      description: Returns detailed cache performance statistics and request latency percentiles.
+      responses:
+        200:
+          description: Statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CacheStats"
+  /stats/history:
+    get:
+      tags: ["Management"]
+      summary: Analytics history
+      description: Returns the last 60 snapshots of cache statistics taken at 60-second intervals.
+      responses:
+        200:
+          description: Historical snapshots
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  snapshots:
+                    type: array
+                    items:
+                      type: object
+  /flush:
+    post:
+      tags: ["Management"]
+      summary: Flush cache
+      description: Removes all entries from the in-memory cache. This is a destructive operation.
+      responses:
+        200:
+          description: Cache flushed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  flushed:
+                    type: boolean
+  /snapshot:
+    post:
+      tags: ["Management"]
+      summary: Trigger snapshot
+      description: Forces an immediate snapshot of the cache to disk via the persistence layer.
+      responses:
+        200:
+          description: Snapshot result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  saved:
+                    type: boolean
+  "/db/{key}":
+    get:
+      tags: ["Database"]
+      summary: Get database entry
+      description: Retrieves a key-value entry from the SQLite persistent store.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+        - $ref: "#/components/parameters/NamespaceQuery"
+
+      responses:
+        200:
+          description: Entry found
+          content:
+            application/json:
+              schema:
+                type: object
+        404:
+          description: Key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags: ["Database"]
+      summary: Set database entry
+      description: Stores or updates a key-value entry in SQLite with optional TTL and tags.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+        - $ref: "#/components/parameters/NamespaceQuery"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DbSetRequest"
+      responses:
+        201:
+          description: Entry stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: ["Database"]
+      summary: Delete database entry
+      description: Removes a key-value entry from the SQLite store.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+        - $ref: "#/components/parameters/NamespaceQuery"
+
+      responses:
+        200:
+          description: Entry deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /db:
+    post:
+      tags: ["Database"]
+      summary: Batch database operations
+      description: "Perform bulk operations on the SQLite store: mget, mset, mdelete, query, or deleteByTags."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DbBatchRequest"
+      responses:
+        200:
+          description: Batch result
+          content:
+            application/json:
+              schema:
+                type: object
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /db-stats:
+    get:
+      tags: ["Database"]
+      summary: Database statistics
+      description: Returns SQLite storage statistics including entry count and size.
+      responses:
+        200:
+          description: Database stats
+          content:
+            application/json:
+              schema:
+                type: object
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /db-keys:
+    get:
+      tags: ["Database"]
+      summary: List database keys
+      description: "Lists keys stored in the SQLite database, with optional glob pattern and namespace filtering."
+      parameters:
+        - name: pattern
+          in: query
+          schema:
+            type: string
+            default: "*"
+          description: Glob pattern
+        - $ref: "#/components/parameters/NamespaceQuery"
+
+      responses:
+        200:
+          description: Key list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: string
+                  count:
+                    type: integer
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /db-clear:
+    post:
+      tags: ["Database"]
+      summary: Clear database
+      description: "Removes all entries from the SQLite store, optionally scoped to a namespace."
+      parameters:
+        - $ref: "#/components/parameters/NamespaceQuery"
+
+      responses:
+        200:
+          description: Database cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cleared:
+                    type: boolean
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /db-purge:
+    post:
+      tags: ["Database"]
+      summary: Purge expired entries
+      description: Removes all expired entries from the SQLite store.
+      responses:
+        200:
+          description: Purge result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  purged:
+                    type: integer
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /query-cache/stats:
+    get:
+      tags: ["QueryCache"]
+      summary: Query cache stats
+      description: Returns hit/miss statistics and entry count for the query result cache.
+      responses:
+        200:
+          description: Query cache stats
+          content:
+            application/json:
+              schema:
+                type: object
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/query-cache/{key}":
+    get:
+      tags: ["QueryCache"]
+      summary: Get cached query
+      description: Retrieves a cached query result by key.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+      responses:
+        200:
+          description: Cache hit
+          content:
+            application/json:
+              schema:
+                type: object
+        404:
+          description: Cache miss
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /query-cache:
+    post:
+      tags: ["QueryCache"]
+      summary: Store query result
+      description: Caches a query result with optional TTL and tags for later retrieval or tag-based invalidation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryCacheStoreRequest"
+      responses:
+        201:
+          description: Cached
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cached:
+                    type: boolean
+                  key:
+                    type: string
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /query-cache/invalidate:
+    post:
+      tags: ["QueryCache"]
+      summary: Invalidate cached queries
+      description: Invalidates cached query results by specific key or by tags.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryCacheInvalidateRequest"
+      responses:
+        200:
+          description: Invalidation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  invalidated:
+                    type: integer
+        400:
+          description: Provide either tags or key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /query-cache/clear:
+    post:
+      tags: ["QueryCache"]
+      summary: Clear query cache
+      description: Removes all entries from the query result cache.
+      responses:
+        200:
+          description: Cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cleared:
+                    type: boolean
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /db-proxy/connectors:
+    get:
+      tags: ["Proxy"]
+      summary: List connectors
+      description: Returns all registered database proxy connectors.
+      responses:
+        200:
+          description: Connector list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connectors:
+                    type: array
+                    items:
+                      type: object
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /db-proxy/register:
+    post:
+      tags: ["Proxy"]
+      summary: Register connector
+      description: "Registers a new database connector for proxied queries. Supports PostgreSQL, MySQL, HTTP, MongoDB, Redis, and Elasticsearch."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectorConfig"
+      responses:
+        201:
+          description: Connector registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  registered:
+                    type: boolean
+                  name:
+                    type: string
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        409:
+          description: Connector already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /db-proxy/unregister:
+    post:
+      tags: ["Proxy"]
+      summary: Remove connector
+      description: Unregisters an existing database connector by name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["name"]
+              properties:
+                name:
+                  type: string
+      responses:
+        200:
+          description: Connector removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unregistered:
+                    type: boolean
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /db-proxy/query:
+    post:
+      tags: ["Proxy"]
+      summary: Execute proxied query
+      description: Executes a query through a registered database connector with optional result caching.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyQueryRequest"
+      responses:
+        200:
+          description: Query result
+          content:
+            application/json:
+              schema:
+                type: object
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        502:
+          description: Upstream database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /db-proxy/invalidate:
+    post:
+      tags: ["Proxy"]
+      summary: Invalidate by tags
+      description: Invalidates cached proxy query results matching the given tags.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["tags"]
+              properties:
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        200:
+          description: Invalidation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  invalidated:
+                    type: integer
+        400:
+          description: tags (non-empty array) is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        503:
+          description: Database disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/locks/{key}/acquire":
+    post:
+      tags: ["Locks"]
+      summary: Acquire lock
+      description: Attempts to acquire a distributed lock for the given key. Returns 409 if the lock is already held.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LockAcquireRequest"
+      responses:
+        201:
+          description: Lock acquired
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  acquired:
+                    type: boolean
+                  lock:
+                    type: object
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        409:
+          description: Lock contention
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  acquired:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+  "/locks/{key}/release":
+    post:
+      tags: ["Locks"]
+      summary: Release lock
+      description: Releases a distributed lock. Only the owner can release the lock.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LockReleaseRequest"
+      responses:
+        200:
+          description: Lock released
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  released:
+                    type: boolean
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/locks/{key}/extend":
+    post:
+      tags: ["Locks"]
+      summary: Extend lock TTL
+      description: Extends the TTL of an existing lock. Only the owner can extend the lock.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LockExtendRequest"
+      responses:
+        200:
+          description: Lock extended
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  extended:
+                    type: boolean
+                  lock:
+                    type: object
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        404:
+          description: Lock not found or owner mismatch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/locks/{key}":
+    get:
+      tags: ["Locks"]
+      summary: Check lock status
+      description: Returns whether a lock is currently held for the given key and its details.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+      responses:
+        200:
+          description: Lock status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  locked:
+                    type: boolean
+                  lock:
+                    type: object
+                    nullable: true
+    delete:
+      tags: ["Locks"]
+      summary: Force release lock
+      description: Force-releases a lock regardless of owner. This is an admin operation.
+      parameters:
+        - $ref: "#/components/parameters/KeyPath"
+
+      responses:
+        200:
+          description: Force released
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  forceReleased:
+                    type: boolean
+  /locks:
+    get:
+      tags: ["Locks"]
+      summary: List all locks
+      description: Returns all currently held distributed locks.
+      responses:
+        200:
+          description: Lock list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  locks:
+                    type: array
+                    items:
+                      type: object
+                  count:
+                    type: integer
+  /replication/status:
+    get:
+      tags: ["Replication"]
+      summary: Replication status
+      description: Returns current replication configuration and synchronization statistics.
+      responses:
+        200:
+          description: Replication status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  config:
+                    type: object
+                  stats:
+                    type: object
+  /replication/replicas:
+    get:
+      tags: ["Replication"]
+      summary: List replicas
+      description: Returns all configured replication replicas.
+      responses:
+        200:
+          description: Replica list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  replicas:
+                    type: array
+                    items:
+                      type: object
+    post:
+      tags: ["Replication"]
+      summary: Add replica
+      description: Registers a new replication target.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplicaConfig"
+      responses:
+        201:
+          description: Replica added
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  added:
+                    type: boolean
+                  id:
+                    type: string
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/replication/replicas/{id}":
+    delete:
+      tags: ["Replication"]
+      summary: Remove replica
+      description: Removes a replication replica by its ID.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Replica ID
+      responses:
+        200:
+          description: Replica removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  removed:
+                    type: boolean
+  /replication/enable:
+    post:
+      tags: ["Replication"]
+      summary: Enable replication
+      description: Enables data replication to all configured replicas.
+      responses:
+        200:
+          description: Replication enabled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+  /replication/disable:
+    post:
+      tags: ["Replication"]
+      summary: Disable replication
+      description: Disables data replication.
+      responses:
+        200:
+          description: Replication disabled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+  /rate-limits:
+    get:
+      tags: ["RateLimits"]
+      summary: List rate limits
+      description: Returns all configured namespace-scoped rate limit rules.
+      responses:
+        200:
+          description: Rate limit list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  limits:
+                    type: array
+                    items:
+                      type: object
+    post:
+      tags: ["RateLimits"]
+      summary: Configure rate limit
+      description: Creates or updates a namespace-scoped rate limit rule.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RateLimitConfig"
+      responses:
+        201:
+          description: Rate limit configured
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  configured:
+                    type: boolean
+                  namespace:
+                    type: string
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/rate-limits/{namespace}":
+    delete:
+      tags: ["RateLimits"]
+      summary: Remove rate limit
+      description: Removes a namespace-scoped rate limit rule.
+      parameters:
+        - name: namespace
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Namespace
+      responses:
+        200:
+          description: Rate limit removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  removed:
+                    type: boolean
+    get:
+      tags: ["RateLimits"]
+      summary: Get rate limit stats
+      description: Returns rate limit configuration and current usage statistics for a specific namespace.
+      parameters:
+        - name: namespace
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Namespace
+      responses:
+        200:
+          description: Rate limit stats
+          content:
+            application/json:
+              schema:
+                type: object
+        404:
+          description: No rate limit configured for this namespace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"

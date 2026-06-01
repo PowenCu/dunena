@@ -16,7 +16,7 @@ export interface PersistenceConfig {
   saveOnShutdown: boolean; // save on SIGINT/SIGTERM
 }
 
-interface SnapshotData {
+export interface SnapshotData {
   version: 1;
   timestamp: number;
   entries: Array<{ key: string; value: string }>;
@@ -132,5 +132,35 @@ export class PersistenceService {
       log.error("Snapshot load failed", { error: String(err) });
       return 0;
     }
+  }
+
+  /** Get the resolved snapshot file path */
+  getFilePath(): string {
+    return resolve(this.config.filePath);
+  }
+
+  /** Restore cache from an uploaded snapshot object (does not touch disk) */
+  restoreFromSnapshot(snapshot: SnapshotData): number {
+    if (!this.cacheService) return 0;
+
+    if (snapshot.version !== 1) {
+      log.warn("Unknown snapshot version in upload", { version: snapshot.version });
+      return 0;
+    }
+
+    let restored = 0;
+    for (const entry of snapshot.entries) {
+      if (typeof entry.key === "string" && typeof entry.value === "string") {
+        if (this.cacheService.setRaw(entry.key, entry.value)) {
+          restored++;
+        }
+      }
+    }
+
+    log.info("Snapshot restored from upload", {
+      entries: restored,
+      total: snapshot.entries.length,
+    });
+    return restored;
   }
 }

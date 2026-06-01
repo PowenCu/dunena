@@ -4,26 +4,34 @@
 // Connects to a running Dunena server over HTTP.
 // Install: bunx dunena <command> [args] [flags]
 
+import { readFileSync, writeFileSync } from "fs";
+
 const VERSION = "0.3.1";
 const BASE = process.env.DUNENA_URL ?? "http://localhost:3000";
 const TOKEN = process.env.DUNENA_AUTH_TOKEN;
 
 // ── Helpers ────────────────────────────────────────────────
 
-function parseFlags(args: string[]): { positional: string[]; ns?: string; json: boolean } {
+function parseFlags(args: string[]): { positional: string[]; ns?: string; json: boolean; format?: string; outputFile?: string } {
   const positional: string[] = [];
   let ns: string | undefined;
   let json = false;
+  let format: string | undefined;
+  let outputFile: string | undefined;
   for (const arg of args) {
     if (arg.startsWith("--ns=")) {
       ns = arg.slice(5);
     } else if (arg === "--json") {
       json = true;
+    } else if (arg.startsWith("--format=")) {
+      format = arg.slice(9);
+    } else if (arg.startsWith("--output=")) {
+      outputFile = arg.slice(9);
     } else {
       positional.push(arg);
     }
   }
-  return { positional, ns, json };
+  return { positional, ns, json, format, outputFile };
 }
 
 function headers(): Record<string, string> {
@@ -68,7 +76,7 @@ function serverOnlyError(cmd: string): never {
 // ── Commands ───────────────────────────────────────────────
 
 const [cmd, ...rawArgs] = process.argv.slice(2);
-const { positional: args, ns, json: jsonFlag } = parseFlags(rawArgs);
+const { positional: args, ns, json: jsonFlag, format: formatFlag, outputFile: outputFlag } = parseFlags(rawArgs);
 
 function output(data: unknown) {
   if (jsonFlag) {
@@ -343,6 +351,142 @@ async function main() {
     break;
   }
 
+  // ── Snapshot & Import/Export commands ─────────────────
+
+  case "snapshot-save": {
+    const outPath = args[0] ?? "./dunena-snapshot.json";
+    // First trigger a save on the server so the file is fresh
+    await request("POST", "/snapshot");
+    // Then download the snapshot file
+    try {
+      const resp = await fetch(`${BASE}/snapshot/download`, { headers: headers() });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        console.error(`Error: ${(err as Record<string, unknown>).error ?? resp.statusText}`);
+        process.exit(1);
+      }
+      const data = await resp.arrayBuffer();
+      writeFileSync(outPath, Buffer.from(data));
+      console.log(`Snapshot saved to ${outPath} (${data.byteLength} bytes)`);
+    } catch (err) {
+      console.error(`Error: could not download snapshot from ${BASE}`);
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+    break;
+  }
+
+  case "snapshot-restore": {
+    const [filePath] = args;
+    if (!filePath) {
+      console.error("Usage: dunena snapshot-restore <path>");
+      process.exit(1);
+    }
+    let fileData: string;
+    try {
+      fileData = readFileSync(filePath, "utf-8");
+    } catch (err) {
+      console.error(`Error: could not read file ${filePath}`);
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+    let snapshot: unknown;
+    try {
+      snapshot = JSON.parse(fileData);
+    } catch {
+      console.error("Error: file is not valid JSON");
+      process.exit(1);
+    }
+    try {
+      const resp = await fetch(`${BASE}/snapshot/upload`, {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify(snapshot),
+      });
+      const result = await resp.json();
+      output(result);
+    } catch (err) {
+      console.error(`Error: could not upload snapshot to ${BASE}`);
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+    break;
+  }
+
+  case "snapshot-list":
+    output(await request("GET", "/stats"));
+    break;
+
+  case "export": {
+    const qs = new URLSearchParams();
+    if (formatFlag) qs.set("format", formatFlag);
+    if (ns) qs.set("ns", ns);
+    const qsStr = qs.toString();
+
+    try {
+      const resp = await fetch(`${BASE}/export${qsStr ? `?${qsStr}` : ""}`, {
+        headers: headers(),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        console.error(`Error: ${(err as Record<string, unknown>).error ?? resp.statusText}`);
+        process.exit(1);
+      }
+      const body = await resp.text();
+
+      if (outputFlag) {
+        writeFileSync(outputFlag, body, "utf-8");
+        console.log(`Exported to ${outputFlag} (${body.length} bytes)`);
+      } else {
+        console.log(body);
+      }
+    } catch (err) {
+      console.error(`Error: could not export from ${BASE}`);
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+    break;
+  }
+
+  case "import": {
+    const [importPath] = args;
+    if (!importPath) {
+      console.error("Usage: dunena import <file>");
+      process.exit(1);
+    }
+    let importData: string;
+    try {
+      importData = readFileSync(importPath, "utf-8");
+    } catch (err) {
+      console.error(`Error: could not read file ${importPath}`);
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+    let importBody: unknown;
+    try {
+      importBody = JSON.parse(importData);
+    } catch {
+      console.error("Error: file is not valid JSON");
+      process.exit(1);
+    }
+    // Support both { entries: [...] } and raw array [...]
+    let entries: unknown[];
+    if (Array.isArray(importBody)) {
+      entries = importBody;
+    } else if (
+      importBody !== null &&
+      typeof importBody === "object" &&
+      Array.isArray((importBody as Record<string, unknown>).entries)
+    ) {
+      entries = (importBody as Record<string, unknown>).entries as unknown[];
+    } else {
+      console.error("Error: JSON must be an array or { entries: [...] }");
+      process.exit(1);
+    }
+    output(await request("POST", "/import", { entries }));
+    break;
+  }
+
   // ── Doctor ────────────────────────────────────────────
 
   case "doctor": {
@@ -409,6 +553,14 @@ async function main() {
     health                          Health check
     bench [count]                   Run benchmark (default: 1000)
 
+  Snapshot & Data Commands:
+    snapshot-save [path]            Save & download snapshot (default: ./dunena-snapshot.json)
+    snapshot-restore <path>         Upload & restore a snapshot file
+    snapshot-list                   Show current cache stats (entry count, etc.)
+    export [--format=json|csv]      Export all cache entries
+           [--output=file]          Write to file instead of stdout
+    import <file>                   Import entries from JSON file
+
   Database Commands:
     db-get   <key>                  Get a durable DB entry
     db-set   <key> <value> [ttl]    Store a durable DB entry
@@ -437,6 +589,8 @@ async function main() {
   Flags:
     --ns=<namespace>    Scope operations to a namespace
     --json              Output compact JSON (for scripting)
+    --format=<fmt>      Export format: json (default) or csv
+    --output=<path>     Write export output to file
 
   Environment:
     DUNENA_URL          Server URL (default: http://localhost:3000)

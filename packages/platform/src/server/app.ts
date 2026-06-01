@@ -12,7 +12,10 @@ import {
   removeNamespaceRateLimit,
   getNamespaceRateLimits,
   getNamespaceRateLimitStats,
+  setRBACService,
+  checkPermission,
 } from "./middleware";
+import { RBACService } from "../services/rbac-service";
 import { createWebSocketHandlers } from "./websocket";
 import { CacheService } from "../services/cache-service";
 import { AnalyticsService } from "../services/analytics-service";
@@ -28,8 +31,8 @@ import {
 import { logger } from "../utils/logger";
 import type { AppConfig, WebSocketData, ReplicaConfig } from "../types";
 import { resolve, dirname } from "path";
-import { existsSync, mkdirSync } from "fs";
-import { PersistenceService } from "../services/persistence-service";
+import { existsSync, mkdirSync, readFileSync } from "fs";
+import { PersistenceService, type SnapshotData } from "../services/persistence-service";
 import { SQLiteAdapter } from "../db/sqlite-adapter";
 import { QueryCacheService } from "../db/query-cache";
 import { DatabaseProxy } from "../db/proxy";
@@ -74,7 +77,12 @@ export async function createApp(appConfig: AppConfig) {
 
     sqliteAdapter = new SQLiteAdapter({ path: appConfig.database.sqlitePath });
     queryCache = new QueryCacheService(sqliteAdapter, cacheService, appConfig.database.queryCacheTTL);
-    dbProxy = new DatabaseProxy(queryCache);
+    dbProxy = new DatabaseProxy(queryCache, appConfig.database.writeBehind);
+
+    // Start the write-behind buffer if configured
+    if (appConfig.database.writeBehind?.enabled) {
+      dbProxy.startWriteBehind();
+    }
 
     // Periodic expired-entry purge
     if (appConfig.database.purgeIntervalMs > 0) {
@@ -96,6 +104,16 @@ export async function createApp(appConfig: AppConfig) {
     pubsub,
     replicationService,
   );
+
+  // ── RBAC Service ───────────────────────────────────────
+  let rbacService: RBACService | null = null;
+  if (appConfig.rbac?.enabled) {
+    const rbacDbDir = dirname(resolve(appConfig.rbac.dbPath));
+    if (!existsSync(rbacDbDir)) mkdirSync(rbacDbDir, { recursive: true });
+    rbacService = new RBACService(appConfig.rbac);
+    setRBACService(rbacService);
+    log.info("RBAC enabled", { dbPath: appConfig.rbac.dbPath });
+  }
 
   // ── GraphQL ────────────────────────────────────────────
   const graphqlHandler = await createGraphQLHandler({
@@ -299,6 +317,98 @@ export async function createApp(appConfig: AppConfig) {
   router.post("/snapshot", () => {
     const ok = persistence.save();
     return Response.json({ saved: ok });
+  });
+
+  // Download the latest snapshot file
+  router.get("/snapshot/download", () => {
+    const filePath = persistence.getFilePath();
+    if (!existsSync(filePath)) {
+      return Response.json({ error: "No snapshot file found" }, { status: 404 });
+    }
+    const data = readFileSync(filePath);
+    return new Response(data, {
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": "attachment; filename=snapshot.json",
+      },
+    });
+  });
+
+  // Upload and restore a snapshot file
+  router.post("/snapshot/upload", async (req) => {
+    let snapshot: SnapshotData;
+    try {
+      snapshot = (await req.json()) as SnapshotData;
+    } catch {
+      return validationError("Invalid JSON body");
+    }
+
+    if (
+      typeof snapshot.version !== "number" ||
+      typeof snapshot.timestamp !== "number" ||
+      !Array.isArray(snapshot.entries)
+    ) {
+      return validationError("Invalid snapshot format: requires version, timestamp, and entries");
+    }
+
+    const restored = persistence.restoreFromSnapshot(snapshot);
+    return Response.json({ restored: true, entriesCount: restored });
+  });
+
+  // Export all cache entries as JSON or CSV
+  router.get("/export", (req) => {
+    const url = new URL(req.url);
+    const format = url.searchParams.get("format") ?? "json";
+    const nsFilter = url.searchParams.get("ns") ?? undefined;
+
+    const allEntries = cacheService.exportEntries();
+    const NS_SEP = "\0";
+
+    // Map raw entries to structured form, optionally filtering by namespace
+    const mapped: Array<{ key: string; value: string; namespace: string }> = [];
+    for (const e of allEntries) {
+      const sepIdx = e.key.indexOf(NS_SEP);
+      const entryNs = sepIdx >= 0 ? e.key.slice(0, sepIdx) : "";
+      const entryKey = sepIdx >= 0 ? e.key.slice(sepIdx + 1) : e.key;
+
+      if (nsFilter !== undefined && entryNs !== nsFilter) continue;
+      mapped.push({ key: entryKey, value: e.value, namespace: entryNs });
+    }
+
+    if (format === "csv") {
+      const csvEscape = (s: string) => '"' + s.replace(/"/g, '""') + '"';
+      const lines = ["key,value,namespace"];
+      for (const m of mapped) {
+        lines.push(`${csvEscape(m.key)},${csvEscape(m.value)},${csvEscape(m.namespace)}`);
+      }
+      return new Response(lines.join("\n") + "\n", {
+        headers: { "Content-Type": "text/csv; charset=utf-8" },
+      });
+    }
+
+    return Response.json(mapped);
+  });
+
+  // Import cache entries from JSON
+  router.post("/import", async (req) => {
+    let body: { entries?: Array<{ key: string; value: string; ttl?: number; ns?: string }> };
+    try {
+      body = (await req.json()) as typeof body;
+    } catch {
+      return validationError("Invalid JSON body");
+    }
+
+    if (!Array.isArray(body.entries) || body.entries.length === 0) {
+      return validationError("entries (non-empty array) is required");
+    }
+
+    let imported = 0;
+    for (const e of body.entries) {
+      if (typeof e.key !== "string" || typeof e.value !== "string") continue;
+      if (cacheService.set(e.key, e.value, e.ttl, e.ns)) imported++;
+    }
+
+    return Response.json({ imported });
   });
 
   router.get("/info", () =>
@@ -586,6 +696,26 @@ export async function createApp(appConfig: AppConfig) {
     }
     const count = await dbProxy.invalidate(body.tags);
     return Response.json({ invalidated: count });
+  });
+
+  // Write-behind buffer stats
+  router.get("/db-proxy/buffer/stats", () => {
+    if (!dbProxy) return Response.json({ error: "Database disabled" }, { status: 503 });
+    const stats = dbProxy.getBufferStats();
+    if (!stats) {
+      return Response.json({ error: "Write-behind not enabled" }, { status: 404 });
+    }
+    return Response.json(stats);
+  });
+
+  // Write-behind buffer force-flush
+  router.post("/db-proxy/buffer/flush", async () => {
+    if (!dbProxy) return Response.json({ error: "Database disabled" }, { status: 503 });
+    const result = await dbProxy.flushBuffer();
+    if (!result) {
+      return Response.json({ error: "Write-behind not enabled" }, { status: 404 });
+    }
+    return Response.json(result);
   });
 
   // ── Atomic Operations ──────────────────────────────────
@@ -969,6 +1099,68 @@ export async function createApp(appConfig: AppConfig) {
     return Response.json(stats);
   });
 
+  // ── Admin: API Key Management ──────────────────────────
+
+  router.post("/admin/keys", async (req) => {
+    if (!rbacService) return Response.json({ error: "RBAC not enabled" }, { status: 503 });
+    const permResp = checkPermission(req, "admin");
+    if (permResp) return permResp;
+
+    let body: { name?: string; permissions?: { read?: boolean; write?: boolean; delete?: boolean; admin?: boolean }; namespaces?: string[]; expiresAt?: number };
+    try {
+      body = (await req.json()) as typeof body;
+    } catch {
+      return validationError("Invalid JSON body");
+    }
+
+    if (!body.name || typeof body.name !== "string") {
+      return validationError("name is required");
+    }
+    if (!body.permissions || typeof body.permissions !== "object") {
+      return validationError("permissions object is required");
+    }
+
+    const permissions = {
+      read: body.permissions.read ?? false,
+      write: body.permissions.write ?? false,
+      delete: body.permissions.delete ?? false,
+      admin: body.permissions.admin ?? false,
+    };
+    const namespaces = Array.isArray(body.namespaces) ? body.namespaces : ["*"];
+
+    const result = await rbacService.createKey(body.name, permissions, namespaces, body.expiresAt);
+    return Response.json(result, { status: 201 });
+  });
+
+  router.get("/admin/keys", async (req) => {
+    if (!rbacService) return Response.json({ error: "RBAC not enabled" }, { status: 503 });
+    const permResp = checkPermission(req, "admin");
+    if (permResp) return permResp;
+
+    const keys = await rbacService.listKeys();
+    return Response.json({ keys });
+  });
+
+  router.get("/admin/keys/:id", async (req, params) => {
+    if (!rbacService) return Response.json({ error: "RBAC not enabled" }, { status: 503 });
+    const permResp = checkPermission(req, "admin");
+    if (permResp) return permResp;
+
+    const keyInfo = await rbacService.getKey(params.id);
+    if (!keyInfo) return Response.json({ error: "Key not found" }, { status: 404 });
+    return Response.json(keyInfo);
+  });
+
+  router.delete("/admin/keys/:id", async (req, params) => {
+    if (!rbacService) return Response.json({ error: "RBAC not enabled" }, { status: 503 });
+    const permResp = checkPermission(req, "admin");
+    if (permResp) return permResp;
+
+    const revoked = await rbacService.revokeKey(params.id);
+    if (!revoked) return Response.json({ error: "Key not found" }, { status: 404 });
+    return Response.json({ revoked: true, id: params.id });
+  });
+
   // ── Prometheus Metrics ─────────────────────────────────
 
   router.get("/metrics", () => {
@@ -1041,7 +1233,9 @@ export async function createApp(appConfig: AppConfig) {
 
   // ── Bun.serve ──────────────────────────────────────────
   const dashboardPath = resolve(import.meta.dir, "../../public/dashboard.html");
-  const docsDir = resolve(import.meta.dir, "../../docs/out");
+  const apiDocsPath = resolve(import.meta.dir, "./api-docs.html");
+  const openApiPath = resolve(import.meta.dir, "../../openapi.yaml");
+  const docsDir = resolve(import.meta.dir, "../../docs");
 
   const MIME_TYPES: Record<string, string> = {
     ".html": "text/html",
@@ -1077,7 +1271,7 @@ export async function createApp(appConfig: AppConfig) {
         url.pathname === "/ws"
       ) {
         // Auth check for WebSocket
-        const wsAuth = authenticate(req, appConfig.server.authToken);
+        const wsAuth = await authenticate(req, appConfig.server.authToken);
         if (wsAuth) return wsAuth;
 
         const upgraded = server.upgrade(req, {
@@ -1098,6 +1292,21 @@ export async function createApp(appConfig: AppConfig) {
         return new Response(Bun.file(dashboardPath), {
           headers: { "Content-Type": "text/html" },
         });
+      }
+
+      // API documentation (Redoc + OpenAPI spec)
+      if (url.pathname === "/docs/redoc") {
+        return new Response(Bun.file(apiDocsPath), {
+          headers: { "Content-Type": "text/html" },
+        });
+      }
+      if (url.pathname === "/docs/openapi.yaml") {
+        if (existsSync(openApiPath)) {
+          return new Response(Bun.file(openApiPath), {
+            headers: { "Content-Type": "text/yaml" },
+          });
+        }
+        return Response.json({ error: "OpenAPI spec not generated. Run: bun run docs:api" }, { status: 404 });
       }
 
       // Documentation site (Next.js static export)
@@ -1135,7 +1344,7 @@ export async function createApp(appConfig: AppConfig) {
       }
 
       // Auth
-      const authResp = authenticate(req, appConfig.server.authToken);
+      const authResp = await authenticate(req, appConfig.server.authToken);
       if (authResp && !url.pathname.startsWith("/health") && !url.pathname.startsWith("/health/")) return authResp;
 
       // Body size check
@@ -1257,6 +1466,8 @@ export async function createApp(appConfig: AppConfig) {
     "",
     `  🌐 Server:       ${baseUrl}`,
     `  📖 Docs:         ${baseUrl}/docs`,
+    `  📘 REST API:     ${baseUrl}/docs/api`,
+    `  📙 Redoc API:    ${baseUrl}/docs/redoc`,
   ];
 
   if (appConfig.server.enableDashboard)
@@ -1280,6 +1491,7 @@ export async function createApp(appConfig: AppConfig) {
   if (appConfig.telemetry.enabled) features.push("OpenTelemetry");
   if (graphqlHandler) features.push("GraphQL");
   if (appConfig.cluster.enabled) features.push("Cluster");
+  if (appConfig.rbac?.enabled) features.push("RBAC");
   banner.push(`  ✅ ${features.join(" · ")}`);
 
   if (appConfig.database.enabled)
@@ -1304,6 +1516,8 @@ export async function createApp(appConfig: AppConfig) {
       persistence.save();
     }
     if (sqliteAdapter) await sqliteAdapter.close();
+    if (dbProxy) await dbProxy.stopWriteBehind();
+    if (rbacService) await rbacService.close();
     cacheService.destroy();
     server.stop();
     process.exit(0);
@@ -1316,5 +1530,5 @@ export async function createApp(appConfig: AppConfig) {
     clusterService.start(appConfig.server.host, appConfig.server.port);
   }
 
-  return { server, cacheService, analytics, pubsub, persistence, sqliteAdapter, queryCache, dbProxy, clusterService };
+  return { server, cacheService, analytics, pubsub, persistence, sqliteAdapter, queryCache, dbProxy, clusterService, rbacService };
 }

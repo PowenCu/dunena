@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Explorer — Dunena Docs</title>
+  <link rel="stylesheet" href="/docs/assets/style.css">
+  <link rel="icon" type="image/svg+xml" href="/docs/assets/logo.svg">
+  <script>
+    (function() {
+      const theme = localStorage.getItem('theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
+</head>
+<body>
+  <div id="scroll-progress"></div>
+  <header class="site-header"></header>
+  <aside class="sidebar"></aside>
+
+  <div class="main" style="padding: 1.2rem 1.2rem 2rem;">
+    <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm); overflow: hidden;">
+      <div style="display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap; padding: 0.8rem 1rem; border-bottom: 1px solid var(--border); background: var(--surface2);">
+        <span style="font-size: 0.78rem; color: var(--dim); font-weight: 600; letter-spacing: 0.01em;">API Explorer</span>
+        <span style="display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border2); background: var(--surface3); color: var(--text); border-radius: 999px; padding: 0.2rem 0.65rem; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">Scalar</span>
+        <span style="margin-left: auto; font-size: 0.68rem; color: var(--muted); font-family: var(--mono);">spec: /openapi.yaml</span>
+      </div>
+      
+      <!-- Scalar host container -->
+      <div id="scalar-host" aria-label="Scalar explorer" style="min-height: 70vh; background: var(--surface);"></div>
+      <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference" defer></script>
+      <script>
+        (function() {
+          function initScalar() {
+            if (typeof Scalar === 'undefined') { setTimeout(initScalar, 100); return; }
+            const theme = document.documentElement.getAttribute('data-theme') || 'dark';
+            Scalar.createApiReference('#scalar-host', {
+              spec: { url: '/docs/openapi.yaml' },
+              configuration: {
+                layout: 'modern',
+                hideDownloadButton: false,
+                darkMode: theme !== 'light',
+              },
+            });
+          }
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initScalar);
+          } else {
+            initScalar();
+          }
+        })();
+      </script>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-links">
+      <a href="https://github.com/powencu/dunena">GitHub</a>
+      <a href="/docs/getting-started">Guide</a>
+      <a href="/docs/api">API Reference</a>
+      <a href="/docs/api-explorer">Explorer</a>
+    </div>
+    <p>Dunena v0.4.0 — Zig + Bun/TypeScript cache engine</p>
+  </footer>
+
+  <script src="/docs/assets/docs.js"></script>
+</body>
+</html>

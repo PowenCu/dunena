@@ -1,0 +1,363 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Dunena Cache Engine — Single-stack ECS Fargate deployment with
+  Application Load Balancer and EFS persistent storage.
+
+# ── Parameters ──────────────────────────────────────────────
+
+Parameters:
+  ServiceName:
+    Type: String
+    Default: dunena
+    Description: Name prefix for all resources
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to deploy into
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for the ECS service and ALB (at least 2 in different AZs)
+
+  ContainerImage:
+    Type: String
+    Default: ghcr.io/powencu/dunena:latest
+    Description: Docker image URI
+
+  Cpu:
+    Type: String
+    Default: '512'
+    AllowedValues: ['256', '512', '1024', '2048', '4096']
+    Description: Fargate task CPU units
+
+  Memory:
+    Type: String
+    Default: '1024'
+    AllowedValues: ['512', '1024', '2048', '4096', '8192']
+    Description: Fargate task memory (MiB)
+
+  MaxCacheEntries:
+    Type: Number
+    Default: 100000
+    Description: Maximum cache entries
+
+  AuthToken:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: Optional authentication token (leave empty to disable auth)
+
+  CertificateArn:
+    Type: String
+    Default: ''
+    Description: ACM certificate ARN for HTTPS (leave empty for HTTP only)
+
+Conditions:
+  HasAuthToken: !Not [!Equals [!Ref AuthToken, '']]
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
+
+# ── Resources ───────────────────────────────────────────────
+
+Resources:
+
+  # ── ECS Cluster ─────────────────────────────────────────
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${ServiceName}-cluster'
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      CapacityProviders:
+        - FARGATE
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+
+  # ── EFS for Persistent Storage ──────────────────────────
+
+  EFSFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: elastic
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub '${ServiceName}-data'
+
+  EFSMountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      SubnetId: !Select [0, !Ref SubnetIds]
+      SecurityGroups:
+        - !Ref EFSSecurityGroup
+
+  EFSMountTargetB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      SubnetId: !Select [1, !Ref SubnetIds]
+      SecurityGroups:
+        - !Ref EFSSecurityGroup
+
+  EFSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${ServiceName} EFS access'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref ServiceSecurityGroup
+
+  # ── ALB ─────────────────────────────────────────────────
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${ServiceName}-alb'
+      Scheme: internet-facing
+      Type: application
+      Subnets: !Ref SubnetIds
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${ServiceName} ALB access'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: '0.0.0.0/0'
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${ServiceName}-tg'
+      Port: 3000
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+      HealthCheckPath: /health/live
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      HealthCheckTimeoutSeconds: 5
+      Matcher:
+        HttpCode: '200'
+
+  ALBListenerHTTP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - !If
+          - HasCertificate
+          - Type: redirect
+            RedirectConfig:
+              Protocol: HTTPS
+              Port: '443'
+              StatusCode: HTTP_301
+          - Type: forward
+            TargetGroupArn: !Ref ALBTargetGroup
+
+  ALBListenerHTTPS:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  # ── Service Security Group ──────────────────────────────
+
+  ServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${ServiceName} service access'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+  # ── IAM ─────────────────────────────────────────────────
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ServiceName}-task-exec'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ServiceName}-task'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: efs-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - elasticfilesystem:ClientMount
+                  - elasticfilesystem:ClientWrite
+                Resource: !GetAtt EFSFileSystem.Arn
+
+  # ── Log Group ───────────────────────────────────────────
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${ServiceName}'
+      RetentionInDays: 30
+
+  # ── Task Definition ─────────────────────────────────────
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref ServiceName
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      Volumes:
+        - Name: dunena-data
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref EFSFileSystem
+            RootDirectory: /
+            TransitEncryption: ENABLED
+      ContainerDefinitions:
+        - Name: dunena
+          Image: !Ref ContainerImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+          Environment:
+            - Name: DUNENA_PORT
+              Value: '3000'
+            - Name: DUNENA_HOST
+              Value: '0.0.0.0'
+            - Name: DUNENA_MAX_ENTRIES
+              Value: !Sub '${MaxCacheEntries}'
+            - Name: DUNENA_DB
+              Value: 'true'
+            - Name: DUNENA_DB_PATH
+              Value: /var/lib/dunena/dunena.db
+            - Name: DUNENA_PERSIST
+              Value: 'true'
+            - Name: DUNENA_PERSIST_PATH
+              Value: /var/lib/dunena/dunena-snapshot.json
+            - !If
+              - HasAuthToken
+              - Name: DUNENA_AUTH_TOKEN
+                Value: !Ref AuthToken
+              - !Ref 'AWS::NoValue'
+          MountPoints:
+            - SourceVolume: dunena-data
+              ContainerPath: /var/lib/dunena
+              ReadOnly: false
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - 'curl -sf http://localhost:3000/health/live || exit 1'
+            Interval: 20
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 15
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: dunena
+
+  # ── ECS Service ─────────────────────────────────────────
+
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - ALBListenerHTTP
+    Properties:
+      ServiceName: !Ref ServiceName
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Ref SubnetIds
+          SecurityGroups:
+            - !Ref ServiceSecurityGroup
+      LoadBalancers:
+        - ContainerName: dunena
+          ContainerPort: 3000
+          TargetGroupArn: !Ref ALBTargetGroup
+      HealthCheckGracePeriodSeconds: 30
+
+# ── Outputs ─────────────────────────────────────────────────
+
+Outputs:
+  ALBDnsName:
+    Description: Application Load Balancer DNS name
+    Value: !GetAtt ALB.DNSName
+
+  ServiceUrl:
+    Description: Dunena service URL
+    Value: !Sub 'http://${ALB.DNSName}'
+
+  ClusterName:
+    Description: ECS cluster name
+    Value: !Ref ECSCluster
+
+  ServiceName:
+    Description: ECS service name
+    Value: !GetAtt ECSService.Name
+
+  EFSId:
+    Description: EFS file system ID
+    Value: !Ref EFSFileSystem
+
+  LogGroupName:
+    Description: CloudWatch log group
+    Value: !Ref LogGroup

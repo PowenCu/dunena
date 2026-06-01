@@ -58,6 +58,7 @@ export interface AppConfig {
   server: ServerConfig;
   persistence: PersistenceConfig;
   database: DatabaseConfig;
+  rbac?: RBACConfig;
   log: {
     level: "debug" | "info" | "warn" | "error";
     format: "text" | "json";
@@ -77,6 +78,42 @@ export interface DatabaseConfig {
   sqlitePath: string;
   queryCacheTTL: number;  // default TTL for query cache entries (ms)
   purgeIntervalMs: number; // how often to purge expired DB entries
+  writeBehind?: WriteBehindConfig;
+}
+
+// ── RBAC Types ─────────────────────────────────────────────
+
+export interface RBACConfig {
+  enabled: boolean;
+  dbPath: string;
+  adminKey?: string;
+}
+
+export interface ApiKeyPermissions {
+  read: boolean;
+  write: boolean;
+  delete: boolean;
+  admin: boolean;
+}
+
+export interface ApiKeyInfo {
+  id: string;
+  name: string;
+  permissions: ApiKeyPermissions;
+  namespaces: string[];
+  createdAt: number;
+  expiresAt: number | null;
+  active: boolean;
+  lastUsedAt: number | null;
+}
+
+// Write-Behind Buffer
+export interface WriteBehindConfig {
+  enabled: boolean;
+  flushIntervalMs: number;    // default 1000
+  maxBufferSize: number;      // default 1000
+  retryAttempts: number;      // default 3
+  retryDelayMs: number;       // default 500
 }
 
 // ── Pub/Sub Types ──────────────────────────────────────────

@@ -62,17 +62,117 @@ function constantTimeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
-export function authenticate(
+// Optional reference to the RBAC service, set via setRBACService()
+let rbacService: import("../services/rbac-service").RBACService | null = null;
+
+/**
+ * Wire the RBAC service into the middleware layer.
+ * Called once during app bootstrap when RBAC is enabled.
+ */
+export function setRBACService(service: import("../services/rbac-service").RBACService): void {
+  rbacService = service;
+}
+
+/**
+ * Authenticate the request.
+ * - If a legacy authToken is configured and the bearer matches, pass through.
+ * - If the bearer is a `dun_*` RBAC key, validate via RBACService.
+ * - Attaches RBAC metadata headers for downstream permission checks.
+ */
+export async function authenticate(
   req: Request,
-  token: string | undefined
-): Response | null {
-  if (!token) return null; // auth disabled
+  token: string | undefined,
+): Promise<Response | null> {
   const auth = req.headers.get("authorization");
-  if (!auth || !constantTimeEqual(auth, `Bearer ${token}`)) {
+  const bearer = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
+
+  // Legacy single-token auth: if token is configured and matches, allow
+  if (token && bearer && constantTimeEqual(bearer, token)) {
+    return null; // authenticated via legacy token
+  }
+
+  // RBAC key auth: if the bearer starts with `dun_`, try RBAC validation
+  if (rbacService && bearer?.startsWith("dun_")) {
+    const keyInfo = await rbacService.validateKey(bearer);
+    if (keyInfo) {
+      // Stash RBAC metadata on request headers for downstream checks
+      // (Headers are mutable on the server side in Bun)
+      req.headers.set("x-rbac-permissions", JSON.stringify(keyInfo.permissions));
+      req.headers.set("x-rbac-namespaces", JSON.stringify(keyInfo.namespaces));
+      req.headers.set("x-rbac-key-id", keyInfo.id);
+      return null; // authenticated via RBAC key
+    }
+    // dun_ key was provided but invalid
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // No auth configured at all → open access
+  if (!token && !rbacService) return null;
+
+  // If we reach here, auth is required but no valid credentials provided
+  if (!auth) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  return Response.json({ error: "Unauthorized" }, { status: 401 });
+}
+
+/**
+ * Check whether the current request has the required RBAC permission.
+ * Returns a 403 Response if the check fails, or null if it passes.
+ *
+ * If RBAC is not enabled (no x-rbac-permissions header), this is a no-op
+ * (returns null) to preserve backward compatibility with legacy auth.
+ */
+export function checkPermission(
+  req: Request,
+  action: "read" | "write" | "delete" | "admin",
+  namespace?: string,
+): Response | null {
+  const permHeader = req.headers.get("x-rbac-permissions");
+  if (!permHeader) {
+    // No RBAC metadata → legacy auth or open access, allow through
+    return null;
+  }
+
+  let permissions: import("../types").ApiKeyPermissions;
+  try {
+    permissions = JSON.parse(permHeader);
+  } catch {
+    return Response.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  // Admin implies all permissions
+  if (permissions.admin) return null;
+
+  // Check action permission
+  if (!permissions[action]) {
+    return Response.json(
+      { error: "Forbidden", detail: `Missing '${action}' permission` },
+      { status: 403 },
+    );
+  }
+
+  // Check namespace access
+  if (namespace !== undefined) {
+    const nsHeader = req.headers.get("x-rbac-namespaces");
+    let namespaces: string[] = [];
+    try {
+      namespaces = nsHeader ? JSON.parse(nsHeader) : [];
+    } catch { /* empty */ }
+
+    const allowed = namespaces.includes("*") || namespaces.includes(namespace);
+    if (!allowed) {
+      return Response.json(
+        { error: "Forbidden", detail: `No access to namespace '${namespace}'` },
+        { status: 403 },
+      );
+    }
+  }
+
   return null;
 }
+
 
 // ── Rate Limiting ──────────────────────────────────────────
 

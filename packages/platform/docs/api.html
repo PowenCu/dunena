@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Reference — Dunena Docs</title>
+  <link rel="stylesheet" href="/docs/assets/style.css">
+  <link rel="icon" type="image/svg+xml" href="/docs/assets/logo.svg">
+  <script>
+    (function() {
+      const theme = localStorage.getItem('theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
+</head>
+<body>
+  <div id="scroll-progress"></div>
+  <header class="site-header"></header>
+  <aside class="sidebar"></aside>
+
+  <div class="main">
+    <h1>REST API Reference</h1>
+    <p>All endpoints return JSON. Errors use standard HTTP status codes with a <code>{"error": "..."}</code> body.</p>
+
+    <blockquote>Base URL: <code>http://localhost:3000</code> (configurable via <code>DUNENA_PORT</code> / <code>DUNENA_HOST</code>)</blockquote>
+    
+    <div class="feature-card" style="margin-top: 1.5rem; border-color: var(--accent); background: var(--accent-glow); display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
+      <div style="flex: 1;">
+        <h3 style="margin-top: 0;">Interactive API Explorer</h3>
+        <p style="margin-bottom: 0;">Try out all endpoints directly from your browser with our interactive Swagger UI explorer.</p>
+      </div>
+      <a href="/docs/api-explorer" class="btn btn-primary" style="flex: 0 0 auto;">Open Explorer</a>
+    </div>
+
+    <h2 id="health">Health Check</h2>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge get">GET</span>
+        <code>/health</code>
+      </div>
+      <p>Returns server health. Does not require authentication.</p>
+    </div>
+    <pre><code>curl http://localhost:3000/health</code></pre>
+    <pre><code>{ "status": "ok", "uptime": 42.5 }</code></pre>
+
+    <h2 id="get-key">Get a Value</h2>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge get">GET</span>
+        <code>/cache/:key</code>
+      </div>
+      <p>Retrieve a cached value by key. Returns 404 if the key does not exist.</p>
+    </div>
+
+    <h3>Query Parameters</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Param</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>ns</code></td>
+            <td>string</td>
+            <td>Optional namespace to scope the key</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <pre><code># Simple get
+curl http://localhost:3000/cache/mykey
+
+# Namespaced get
+curl "http://localhost:3000/cache/mykey?ns=sessions"</code></pre>
+
+    <h3>Response (200)</h3>
+    <pre><code>{ "key": "mykey", "value": "hello world" }</code></pre>
+
+    <h3>Response (404)</h3>
+    <pre><code>{ "error": "Key not found" }</code></pre>
+
+    <h2 id="set-key">Set a Value</h2>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge post">POST</span>
+        <code>/cache/:key</code>
+      </div>
+      <p>Store a value in the cache. Creates or overwrites the key.</p>
+    </div>
+
+    <h3>Query Parameters</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Param</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>ns</code></td>
+            <td>string</td>
+            <td>Optional namespace (also accepted in body)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Request Body</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Required</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>value</code></td>
+            <td>string</td>
+            <td>Yes</td>
+            <td>The value to store (max 4 MB)</td>
+          </tr>
+          <tr>
+            <td><code>ttl</code></td>
+            <td>integer</td>
+            <td>No</td>
+            <td>Time-to-live in milliseconds</td>
+          </tr>
+          <tr>
+            <td><code>ns</code></td>
+            <td>string</td>
+            <td>No</td>
+            <td>Namespace (query param takes precedence)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <pre><code># Set with TTL of 60 seconds (60000 ms)
+curl -X POST http://localhost:3000/cache/session-abc \
+  -H "Content-Type: application/json" \
+  -d '{"value": "{\"user\":\"alice\"}", "ttl": 60000}'
+
+# Namespaced set
+curl -X POST "http://localhost:3000/cache/token?ns=auth" \
+  -H "Content-Type: application/json" \
+  -d '{"value": "abc123"}'</code></pre>
+
+    <h3>Response (201)</h3>
+    <pre><code>{ "ok": true }</code></pre>
+
+    <h2 id="delete-key">Delete a Value</h2>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge delete">DELETE</span>
+        <code>/cache/:key</code>
+      </div>
+      <p>Remove a key from the cache.</p>
+    </div>
+
+    <h3>Query Parameters</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Param</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>ns</code></td>
+            <td>string</td>
+            <td>Optional namespace</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <pre><code>curl -X DELETE "http://localhost:3000/cache/mykey?ns=sessions"</code></pre>
+
+    <h3>Response (200)</h3>
+    <pre><code>{ "deleted": true }</code></pre>
+
+    <h2 id="batch">Batch Operations</h2>
+
+    <h3>Multi-Get (mget)</h3>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge post">POST</span>
+        <code>/cache</code>
+      </div>
+      <p>Retrieve multiple keys in one request.</p>
+    </div>
+
+    <pre><code>curl -X POST http://localhost:3000/cache \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mget", "keys": ["k1", "k2", "k3"]}'</code></pre>
+    <pre><code>{ "result": { "k1": "val1", "k2": "val2", "k3": null } }</code></pre>
+
+    <h3>Multi-Set (mset)</h3>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge post">POST</span>
+        <code>/cache</code>
+      </div>
+      <p>Store multiple key-value pairs in one request.</p>
+    </div>
+
+    <pre><code>curl -X POST http://localhost:3000/cache \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "mset",
+    "entries": [
+      {"key": "k1", "value": "v1"},
+      {"key": "k2", "value": "v2", "ttl": 30000}
+    ],
+    "ns": "myapp"
+  }'</code></pre>
+    <pre><code>{ "stored": 2 }</code></pre>
+
+    <h2 id="keys">Key Scanning</h2>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge get">GET</span>
+        <code>/keys</code>
+      </div>
+      <p>Scan and list keys matching a pattern. Supports cursor-based pagination.</p>
+    </div>
+
+    <h3>Query Parameters</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Param</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>pattern</code></td>
+            <td>string</td>
+            <td><code>*</code></td>
+            <td>Glob pattern (<code>*</code> and <code>?</code> wildcards)</td>
+          </tr>
+          <tr>
+            <td><code>ns</code></td>
+            <td>string</td>
+            <td>—</td>
+            <td>Filter to a namespace</td>
+          </tr>
+          <tr>
+            <td><code>cursor</code></td>
+            <td>integer</td>
+            <td><code>0</code></td>
+            <td>Pagination cursor</td>
+          </tr>
+          <tr>
+            <td><code>count</code></td>
+            <td>integer</td>
+            <td><code>100</code></td>
+            <td>Max keys to return (cap: 1000)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <pre><code>curl "http://localhost:3000/keys?pattern=user-*&ns=sessions&count=50"</code></pre>
+    <pre><code>{ "cursor": 0, "keys": ["user-1", "user-2", "user-3"] }</code></pre>
+    <p>When <code>cursor</code> is <code>0</code> in the response, there are no more results. Pass the returned cursor to get the next page.</p>
+
+    <h2 id="stats">Stats &amp; Info</h2>
+
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge get">GET</span>
+        <code>/stats</code>
+      </div>
+      <p>Returns cache statistics and latency data.</p>
+    </div>
+    <pre><code>{
+  "cache": {
+    "hits": 1245, "misses": 302, "evictions": 10,
+    "puts": 1500, "deletes": 45, "currentSize": 1444,
+    "maxSize": 100000, "hitRate": 0.805
+  },
+  "latency": {
+    "mean": 0.52, "p50": 0.38, "p95": 1.2,
+    "p99": 2.8, "min": 0.1, "max": 15.3, "stdDev": 0.6
+  }
+}</code></pre>
+
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge get">GET</span>
+        <code>/stats/history</code>
+      </div>
+      <p>Returns 60 most recent analytics snapshots (taken every 60 seconds).</p>
+    </div>
+
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge get">GET</span>
+        <code>/info</code>
+      </div>
+      <p>Server metadata.</p>
+    </div>
+    <pre><code>{ "name": "dunena", "version": "0.4.0", "entries": 42, "uptime": 3600 }</code></pre>
+
+    <h2 id="metrics">Prometheus Metrics</h2>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge get">GET</span>
+        <code>/metrics</code>
+      </div>
+      <p>Returns metrics in Prometheus exposition format.</p>
+    </div>
+
+    <h3>Published Metrics</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>dunena_cache_hits_total</code></td>
+            <td>counter</td>
+            <td>Total cache hits</td>
+          </tr>
+          <tr>
+            <td><code>dunena_cache_misses_total</code></td>
+            <td>counter</td>
+            <td>Total cache misses</td>
+          </tr>
+          <tr>
+            <td><code>dunena_cache_evictions_total</code></td>
+            <td>counter</td>
+            <td>Total LRU evictions</td>
+          </tr>
+          <tr>
+            <td><code>dunena_cache_puts_total</code></td>
+            <td>counter</td>
+            <td>Total writes</td>
+          </tr>
+          <tr>
+            <td><code>dunena_cache_deletes_total</code></td>
+            <td>counter</td>
+            <td>Total deletes</td>
+          </tr>
+          <tr>
+            <td><code>dunena_cache_entries</code></td>
+            <td>gauge</td>
+            <td>Current entry count</td>
+          </tr>
+          <tr>
+            <td><code>dunena_cache_max_entries</code></td>
+            <td>gauge</td>
+            <td>Maximum capacity</td>
+          </tr>
+          <tr>
+            <td><code>dunena_cache_hit_rate</code></td>
+            <td>gauge</td>
+            <td>Hit rate (0–1)</td>
+          </tr>
+          <tr>
+            <td><code>dunena_request_latency_ms</code></td>
+            <td>gauge</td>
+            <td>Latency quantiles (avg, p50, p95, p99)</td>
+          </tr>
+          <tr>
+            <td><code>dunena_uptime_seconds</code></td>
+            <td>gauge</td>
+            <td>Server uptime</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <pre><code># Prometheus scrape config
+scrape_configs:
+  - job_name: 'dunena'
+    static_configs:
+      - targets: ['localhost:3000']
+    metrics_path: '/metrics'</code></pre>
+
+    <h2 id="flush">Flush</h2>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge post">POST</span>
+        <code>/flush</code>
+      </div>
+      <p>Clear all entries from the cache. This also clears the bloom filter and all TTL timers.</p>
+    </div>
+    <pre><code>curl -X POST http://localhost:3000/flush</code></pre>
+    <pre><code>{ "flushed": true }</code></pre>
+
+    <hr />
+
+    <h2 id="snapshot">Snapshot</h2>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge post">POST</span>
+        <code>/snapshot</code>
+      </div>
+      <p>Trigger an immediate save of the entire cache to disk. Requires persistence to be enabled. The file is written atomically (temp file + rename).</p>
+    </div>
+    <pre><code>curl -X POST http://localhost:3000/snapshot</code></pre>
+    <pre><code>{ "saved": true }</code></pre>
+    <blockquote>If persistence is disabled, returns <code>{ "saved": false }</code>.</blockquote>
+
+    <hr />
+
+    <h2 id="database">SQLite Database Endpoints</h2>
+    <p>Dunena includes a durable SQLite-backed key-value layer exposed under <code>/db*</code>.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Method</th>
+            <th>Path</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/db/:key</code></td>
+            <td>Get a stored entry (includes metadata/tags)</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/db/:key</code></td>
+            <td>Store/update a DB entry</td>
+          </tr>
+          <tr>
+            <td><code>DELETE</code></td>
+            <td><code>/db/:key</code></td>
+            <td>Delete a DB entry</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/db</code></td>
+            <td>Batch operations: <code>mget</code>, <code>mset</code>, <code>mdelete</code>, <code>query</code>, <code>deleteByTags</code></td>
+          </tr>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/db-stats</code></td>
+            <td>Database statistics</td>
+          </tr>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/db-keys</code></td>
+            <td>List DB keys</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/db-clear</code></td>
+            <td>Clear DB entries</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/db-purge</code></td>
+            <td>Purge expired DB entries</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <pre><code># Durable write
+curl -X POST http://localhost:3000/db/user:42 \
+  -H "Content-Type: application/json" \
+  -d '{"value":"{\"name\":\"Alice\"}","tags":["users","active"],"ttl":3600000}'
+
+# Durable read
+curl http://localhost:3000/db/user:42</code></pre>
+
+    <h2 id="query-cache">Query Cache Endpoints</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Method</th>
+            <th>Path</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/query-cache/:key</code></td>
+            <td>Get cached query result</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/query-cache</code></td>
+            <td>Store query cache entry</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/query-cache/invalidate</code></td>
+            <td>Invalidate by tags or key</td>
+          </tr>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/query-cache/stats</code></td>
+            <td>Query cache stats</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/query-cache/clear</code></td>
+            <td>Clear query cache</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="db-proxy">Database Proxy Endpoints</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Method</th>
+            <th>Path</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/db-proxy/connectors</code></td>
+            <td>List registered connectors</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/db-proxy/register</code></td>
+            <td>Register connector</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/db-proxy/unregister</code></td>
+            <td>Unregister connector</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/db-proxy/query</code></td>
+            <td>Execute proxied query (cache-aware)</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/db-proxy/invalidate</code></td>
+            <td>Invalidate cached proxy queries by tags</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <pre><code># Register connector
+curl -X POST http://localhost:3000/db-proxy/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"supabase","type":"http","connectionString":"https://example.com/query"}'
+
+# Execute query via connector
+curl -X POST http://localhost:3000/db-proxy/query \
+  -H "Content-Type: application/json" \
+  -d '{"connector":"supabase","query":"SELECT * FROM users"}'</code></pre>
+
+    <hr />
+
+    <h2 id="health-probes">Health Probes</h2>
+    <p>Kubernetes-compatible liveness and readiness probes.</p>
+
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge get">GET</span>
+        <code>/health/live</code>
+      </div>
+      <p>Liveness probe. Returns 200 if the process is alive. Does not require authentication.</p>
+    </div>
+    <pre><code>{ "status": "alive" }</code></pre>
+
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge get">GET</span>
+        <code>/health/ready</code>
+      </div>
+      <p>Readiness probe. Checks SQLite connectivity. Returns 503 if the database is unavailable.</p>
+    </div>
+    <pre><code>{ "status": "ready" }</code></pre>
+
+    <h2 id="cache-info">Cache Info</h2>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge get">GET</span>
+        <code>/cache/info</code>
+      </div>
+      <p>Returns cache metadata: eviction policy, memory usage, CAS stats, and current size.</p>
+    </div>
+    <pre><code>{
+  "evictionPolicy": "lru",
+  "memoryBytes": 409600,
+  "casHits": 12,
+  "casMisses": 3,
+  "currentSize": 1444,
+  "maxSize": 100000
+}</code></pre>
+
+    <h2 id="atomic">Atomic Operations</h2>
+
+    <h3>Increment</h3>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge post">POST</span>
+        <code>/cache/:key/incr</code>
+      </div>
+      <p>Atomically increment a numeric value. Creates the key with <code>0 + delta</code> if it does not exist.</p>
+    </div>
+    <pre><code>curl -X POST http://localhost:3000/cache/counter/incr \
+  -H "Content-Type: application/json" \
+  -d '{"delta": 1}'</code></pre>
+    <pre><code>{ "value": 1 }</code></pre>
+
+    <h3>Decrement</h3>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge post">POST</span>
+        <code>/cache/:key/decr</code>
+      </div>
+      <p>Atomically decrement a numeric value.</p>
+    </div>
+    <pre><code>curl -X POST http://localhost:3000/cache/counter/decr \
+  -H "Content-Type: application/json" \
+  -d '{"delta": 1}'</code></pre>
+    <pre><code>{ "value": 0 }</code></pre>
+
+    <h2 id="cas">Compare-and-Swap (CAS)</h2>
+
+    <h3>Get Version</h3>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge get">GET</span>
+        <code>/cache/:key/version</code>
+      </div>
+      <p>Get the current version number of a key for optimistic locking.</p>
+    </div>
+    <pre><code>{ "key": "mykey", "version": 3 }</code></pre>
+
+    <h3>Compare-and-Swap</h3>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge put">PUT</span>
+        <code>/cache/:key/cas</code>
+      </div>
+      <p>Set a value only if the version matches. Used for optimistic concurrency control.</p>
+    </div>
+    <pre><code>curl -X PUT http://localhost:3000/cache/mykey/cas \
+  -H "Content-Type: application/json" \
+  -d '{"value": "new-value", "expectedVersion": 3}'</code></pre>
+    <pre><code>{ "ok": true }</code></pre>
+
+    <h2 id="ttl-ops">TTL Operations</h2>
+
+    <h3>Get TTL</h3>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge get">GET</span>
+        <code>/cache/:key/ttl</code>
+      </div>
+      <p>Get the remaining TTL for a key in milliseconds. Returns <code>-1</code> if no TTL is set.</p>
+    </div>
+    <pre><code>{ "key": "mykey", "ttl": 45000 }</code></pre>
+
+    <h3>Touch (Update TTL)</h3>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge post">POST</span>
+        <code>/cache/:key/touch</code>
+      </div>
+      <p>Update the TTL of an existing key without changing its value.</p>
+    </div>
+    <pre><code>curl -X POST http://localhost:3000/cache/mykey/touch \
+  -H "Content-Type: application/json" \
+  -d '{"ttl": 120000}'</code></pre>
+    <pre><code>{ "ok": true }</code></pre>
+
+    <h3>Warmup</h3>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge post">POST</span>
+        <code>/cache/warmup</code>
+      </div>
+      <p>Bulk-load entries into the cache. Useful for pre-populating from a database.</p>
+    </div>
+    <pre><code>curl -X POST http://localhost:3000/cache/warmup \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entries": [
+      {"key": "user:1", "value": "Alice", "ns": "users"},
+      {"key": "user:2", "value": "Bob", "ns": "users", "ttl": 300000}
+    ]
+  }'</code></pre>
+
+    <h2 id="import-export">Import / Export</h2>
+
+    <h3>Export</h3>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge get">GET</span>
+        <code>/export</code>
+      </div>
+      <p>Export all cache entries as JSON or CSV.</p>
+    </div>
+    <pre><code># JSON export
+curl http://localhost:3000/export
+
+# CSV export, filtered by namespace
+curl "http://localhost:3000/export?format=csv&ns=sessions"</code></pre>
+
+    <h3>Import</h3>
+    <div class="endpoint">
+      <div class="endpoint-head">
+        <span class="badge post">POST</span>
+        <code>/import</code>
+      </div>
+      <p>Import entries from a JSON array.</p>
+    </div>
+    <pre><code>curl -X POST http://localhost:3000/import \
+  -H "Content-Type: application/json" \
+  -d '[{"key":"a","value":"1"},{"key":"b","value":"2"}]'</code></pre>
+
+    <h2 id="locks">Distributed Locks</h2>
+    <p>Dunena provides distributed locks for coordinating access across processes.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Method</th>
+            <th>Path</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/locks/:key/acquire</code></td>
+            <td>Acquire a lock (body: <code>{ "owner": "...", "ttl": 30 }</code>)</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/locks/:key/release</code></td>
+            <td>Release a held lock</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/locks/:key/extend</code></td>
+            <td>Extend lock TTL</td>
+          </tr>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/locks/:key</code></td>
+            <td>Check lock status</td>
+          </tr>
+          <tr>
+            <td><code>DELETE</code></td>
+            <td><code>/locks/:key</code></td>
+            <td>Force-release a lock (admin)</td>
+          </tr>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/locks</code></td>
+            <td>List all active locks</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="replication">Replication</h2>
+    <p>Configure leader-follower replication for high availability.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Method</th>
+            <th>Path</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/replication/status</code></td>
+            <td>Replication config and stats</td>
+          </tr>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/replication/replicas</code></td>
+            <td>List configured replicas</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/replication/replicas</code></td>
+            <td>Add a replica</td>
+          </tr>
+          <tr>
+            <td><code>DELETE</code></td>
+            <td><code>/replication/replicas/:id</code></td>
+            <td>Remove a replica</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/replication/enable</code></td>
+            <td>Enable replication</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/replication/disable</code></td>
+            <td>Disable replication</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="rate-limits">Rate Limiting</h2>
+    <p>Namespace-scoped rate limiting.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Method</th>
+            <th>Path</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/rate-limits</code></td>
+            <td>List all namespace rate limits</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/rate-limits</code></td>
+            <td>Configure a namespace rate limit</td>
+          </tr>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/rate-limits/:namespace</code></td>
+            <td>Get rate limit stats for a namespace</td>
+          </tr>
+          <tr>
+            <td><code>DELETE</code></td>
+            <td><code>/rate-limits/:namespace</code></td>
+            <td>Remove a namespace rate limit</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="rbac">API Key Management (RBAC)</h2>
+    <p>When RBAC is enabled, manage API keys and their permissions.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Method</th>
+            <th>Path</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/admin/keys</code></td>
+            <td>Create a new API key with permissions</td>
+          </tr>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/admin/keys</code></td>
+            <td>List all API keys</td>
+          </tr>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/admin/keys/:id</code></td>
+            <td>Get API key details</td>
+          </tr>
+          <tr>
+            <td><code>DELETE</code></td>
+            <td><code>/admin/keys/:id</code></td>
+            <td>Revoke an API key</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <hr />
+
+    <h2>Error Responses</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>400</code></td>
+            <td>Validation error (invalid key, value, TTL, or JSON body)</td>
+          </tr>
+          <tr>
+            <td><code>401</code></td>
+            <td>Missing or invalid Bearer token</td>
+          </tr>
+          <tr>
+            <td><code>404</code></td>
+            <td>Key not found or route not found</td>
+          </tr>
+          <tr>
+            <td><code>413</code></td>
+            <td>Request body exceeds 5 MB</td>
+          </tr>
+          <tr>
+            <td><code>429</code></td>
+            <td>Rate limit exceeded</td>
+          </tr>
+          <tr>
+            <td><code>500</code></td>
+            <td>Internal server error</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Validation Rules</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Constraint</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>key</code></td>
+            <td>Non-empty string, max 512 chars, printable ASCII only</td>
+          </tr>
+          <tr>
+            <td><code>value</code></td>
+            <td>String, max 4 MB (UTF-8 encoded)</td>
+          </tr>
+          <tr>
+            <td><code>ttl</code></td>
+            <td>Non-negative integer (milliseconds), optional</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-links">
+      <a href="https://github.com/powencu/dunena">GitHub</a>
+      <a href="/docs/getting-started">Guide</a>
+      <a href="/docs/api">API Reference</a>
+      <a href="/docs/api-explorer">Explorer</a>
+    </div>
+    <p>Dunena v0.4.0 — Zig + Bun/TypeScript cache engine</p>
+  </footer>
+
+  <script src="/docs/assets/docs.js"></script>
+</body>
+</html>

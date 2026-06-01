@@ -2,7 +2,7 @@
 
 This document serves as the central repository for planned features, addons, tooling, scripts, and agent skill definitions for the Dunena project. Other agents can use this file to pick up tasks and understand the project's trajectory.
 
-> **Last updated:** 2026-05-10 — Expanded with detailed implementation specs, priority tiers, and new proposals.
+> **Last updated:** 2026-06-01 — Updated status for all completed implementations.
 
 ---
 
@@ -13,14 +13,21 @@ This document serves as the central repository for planned features, addons, too
 | **P0 — Ship Next** | Load Testing Suite | Low | ✅ Done |
 | **P0 — Ship Next** | Python SDK | Medium | ✅ Done |
 | **P0 — Ship Next** | Health Check Enhancements | Low | ✅ Done |
+| **P0 — Ship Next** | Snapshot Export/Import CLI | Low | ✅ Done |
 | **P1 — High** | Expanded DB Proxy Connectors | Low–Medium | ✅ Done |
 | **P1 — High** | Cloud Storage Persistence | Medium | ✅ Done |
 | **P1 — High** | Cloud Deployment Scripts | Medium | ✅ Done |
 | **P1 — High** | ARC Eviction Policy (Zig) | Medium | ✅ Done |
-| **P2 — Medium** | Redis Protocol Translation Layer | High | 🔵 Design phase |
-| **P2 — Medium** | GraphQL API Endpoint | Medium | 🔵 Design phase |
-| **P2 — Medium** | OpenTelemetry Integration | Medium | 🔵 Design phase |
-| **P3 — Future** | High Availability / Clustering | Very High | ⚪ Backlog |
+| **P1 — High** | Write-Behind DB Proxy Caching | Medium | ✅ Done |
+| **P1 — High** | Automated API Documentation | Low–Medium | ✅ Done |
+| **P2 — Medium** | Redis Protocol Translation Layer | High | ✅ Done |
+| **P2 — Medium** | GraphQL API Endpoint | Medium | ✅ Done |
+| **P2 — Medium** | OpenTelemetry Integration | Medium | ✅ Done |
+| **P2 — Medium** | SIMD Hashing & Bloom Filter (Zig) | Medium | ✅ Done |
+| **P2 — Medium** | Namespace-level RBAC & API Keys | Medium | ✅ Done |
+| **P2 — Medium** | Testing Gap Coverage | Medium | ✅ Done |
+| **P2 — Medium** | Glassmorphic UI Admin Dashboard | Medium | ⚪ Backlog |
+| **P3 — Future** | High Availability / Clustering | Very High | ✅ Done |
 
 ---
 
@@ -221,6 +228,38 @@ This document serves as the central repository for planned features, addons, too
 
 ---
 
+### 9. SIMD Hashing & Bloom Filter (Zig Feature) — P2
+
+- **Description**: Upgrade the native hashing algorithm in the Bloom filter to a SIMD-accelerated FarmHash or xxHash utilizing Zig's `@Vector` capabilities.
+- **Benefit**: Significantly increases throughput for key validation operations under high request volumes.
+- **Complexity**: Medium
+
+---
+
+### 10. Write-Behind (Write-Back) DB Proxy Caching (Feature) — P1
+
+- **Description**: Add an asynchronous write path to the Database Proxy. Write operations are temporarily buffered in memory or a fast local transaction log, and flushed down to target databases asynchronously.
+- **Benefit**: Protects backend relational databases from heavy write spikes and returns instant responses to clients.
+- **Complexity**: Medium
+
+---
+
+### 11. Namespace-level RBAC & API Keys (Security Feature) — P2
+
+- **Description**: Expose token validation inside the middleware layer. Assign specific permissions per key (e.g. read, write, admin) mapped to targeted namespaces.
+- **Benefit**: Prevents tenants or distinct microservices from cross-contaminating cache spaces.
+- **Complexity**: Medium
+
+---
+
+### 12. Glassmorphic UI Admin Dashboard (Addon) — P2
+
+- **Description**: Bundle a sleek, responsive Single Page Application dashboard served from Dunena's HTTP API (e.g. `/dashboard`).
+- **Benefit**: Offers real-time graphical insight into cache memory usages, hit/miss ratios, connected WebSocket channels, and active namespaces.
+- **Complexity**: Medium
+
+---
+
 ## 🛠 Tooling & Scripts
 
 ### 1. Official SDKs — P0 (Python first)
@@ -394,9 +433,9 @@ To efficiently distribute work, agents should adopt the following specific skill
   - `zig/src/compression.zig` — RLE compression
   - `zig/src/stats.zig` — Statistical computations
 - **Current backlog**:
-  - [ ] Implement ARC eviction policy (see Feature #6 above)
+  - [x] Implement ARC eviction policy (see Feature #6 above)
   - [ ] Add `dunena_cache_iterate()` export for efficient bulk key scanning
-  - [ ] Investigate SIMD-accelerated hash functions for bloom filter
+  - [x] Investigate SIMD-accelerated hash functions for bloom filter
   - [ ] Add memory pool/arena allocator option for reduced fragmentation
 
 ### `bun-platform-development`
@@ -409,10 +448,10 @@ To efficiently distribute work, agents should adopt the following specific skill
   - `packages/platform/src/server/websocket.ts` — WebSocket handler
   - `packages/platform/src/server/router.ts` — Route matching
 - **Current backlog**:
-  - [ ] GraphQL endpoint (see Feature #4 above)
-  - [ ] Health check enhancements (see Feature #7 above)
-  - [ ] Redis RESP adapter integration point
-  - [ ] OpenTelemetry instrumentation
+  - [x] GraphQL endpoint (see Feature #4 above)
+  - [x] Health check enhancements (see Feature #7 above)
+  - [x] Redis RESP adapter integration point
+  - [x] OpenTelemetry instrumentation
   - [ ] Refactor `app.ts` — consider splitting into route modules (it's getting large)
 
 ### `sqlite-durable-storage`
@@ -425,8 +464,8 @@ To efficiently distribute work, agents should adopt the following specific skill
   - `packages/platform/src/db/proxy.ts` — Database proxy service
   - `packages/platform/src/db/adapter.ts` — `StorageAdapter` interface
 - **Current backlog**:
-  - [ ] Add MongoDB, Redis, Elasticsearch connectors to proxy (see Feature #5)
-  - [ ] Cloud storage backup integration (see Feature #2)
+  - [x] Add MongoDB, Redis, Elasticsearch connectors to proxy (see Feature #5)
+  - [x] Cloud storage backup integration (see Feature #2)
   - [ ] Implement write-ahead log for crash recovery
   - [ ] Add query plan caching for repeated proxy queries
 
@@ -438,7 +477,7 @@ To efficiently distribute work, agents should adopt the following specific skill
   - `packages/dunena/src/cli.ts` — Existing TypeScript CLI/SDK (454 lines)
   - `packages/dunena/package.json` — npm package config
 - **Current backlog**:
-  - [ ] Python SDK (see Tooling #1 — **P0**)
+  - [x] Python SDK (see Tooling #1 — **P0**)
   - [ ] Go SDK
   - [ ] Rust SDK
   - [ ] TypeScript SDK improvements (WebSocket client, connection pooling)
@@ -454,9 +493,10 @@ To efficiently distribute work, agents should adopt the following specific skill
   - `scripts/bump-version.ts` — Version management
   - `.github/workflows/` — CI/CD pipelines
 - **Current backlog**:
-  - [ ] Helm chart (see Tooling #3)
-  - [ ] Terraform modules (see Tooling #3)
-  - [ ] k6 benchmark suite (see Tooling #2 — **P0**)
+  - [x] Helm chart (see Tooling #3)
+  - [x] Terraform modules — AWS (ECS Fargate + EFS) and GCP (Cloud Run + GCS)
+  - [x] k6 benchmark suite (see Tooling #2 — **P0**)
+  - [x] CloudFormation template (ECS + ALB + EFS)
   - [ ] Add staging deployment workflow
   - [ ] Container image multi-arch builds (arm64 + amd64)
 
@@ -475,10 +515,13 @@ To efficiently distribute work, agents should adopt the following specific skill
   - `packages/platform/tests/db.test.ts` — Database tests (19KB)
   - `packages/platform/tests/ffi-boundary.test.ts` — FFI boundary tests
 - **Current backlog**:
-  - [ ] WebSocket integration tests (currently untested)
+  - [x] WebSocket integration tests
+  - [x] GraphQL integration tests
+  - [x] Lock service tests
+  - [x] Persistence service snapshot roundtrip tests
+  - [x] RBAC service tests (18 tests)
+  - [x] Redis adapter RESP parser tests (19 tests)
   - [ ] Replication service tests
-  - [ ] Lock service tests
-  - [ ] Persistence service snapshot roundtrip tests
   - [ ] Stress tests for concurrent cache access
   - [ ] Add code coverage reporting to CI
 

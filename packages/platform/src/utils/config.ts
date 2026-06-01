@@ -77,6 +77,11 @@ export function loadConfig(): AppConfig {
       priority: envInt("DUNENA_CLUSTER_PRIORITY", 100),
       localReads: envBool("DUNENA_CLUSTER_LOCAL_READS", true),
     },
+    rbac: {
+      enabled: envBool("DUNENA_RBAC_ENABLED", false),
+      dbPath: env("DUNENA_RBAC_DB_PATH", "./data/rbac.sqlite"),
+      adminKey: process.env.DUNENA_RBAC_ADMIN_KEY,
+    },
   };
 }
 

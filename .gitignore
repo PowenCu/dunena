@@ -51,7 +51,4 @@ sdks/python/.pytest_cache/
 *.tfstate.backup
 .terraform.lock.hcl
 
-# Next.js Docs
-packages/platform/docs/.next/
-packages/platform/docs/out/
 

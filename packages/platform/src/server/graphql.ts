@@ -144,10 +144,10 @@ function buildResolvers(ctx: GraphQLContext) {
           hits: s.hits,
           misses: s.misses,
           hitRate: s.hitRate,
-          entries: s.entries,
+          entries: s.currentSize,
           evictions: s.evictions,
           memoryBytes: s.memoryBytes,
-          maxEntries: s.maxEntries,
+          maxEntries: s.maxSize,
         };
       },
 
@@ -159,37 +159,36 @@ function buildResolvers(ctx: GraphQLContext) {
         return cacheService.ttl(key, ns);
       },
 
-      dbEntry: (_: any, { key, ns }: { key: string; ns?: string }) => {
+      dbEntry: async (_: any, { key, ns }: { key: string; ns?: string }) => {
         if (!sqliteAdapter) return null;
-        const fk = ns ? `${ns}\0${key}` : key;
-        const row = sqliteAdapter.get(fk);
+        const row = await sqliteAdapter.get(key, ns ?? "");
         if (!row) return null;
         return {
           key,
           value: row.value,
-          namespace: ns ?? null,
-          tags: row.tags ? JSON.parse(row.tags) : [],
-          createdAt: row.created_at,
-          expiresAt: row.expires_at ?? null,
+          namespace: row.namespace || null,
+          tags: row.tags,
+          createdAt: row.createdAt,
+          expiresAt: row.expiresAt,
         };
       },
 
-      dbQuery: (_: any, { pattern, tags, limit }: any) => {
+      dbQuery: async (_: any, { pattern, tags, limit }: any) => {
         if (!sqliteAdapter) return [];
-        const rows = sqliteAdapter.query(pattern, tags, limit ?? 100);
+        const rows = await sqliteAdapter.query({ prefix: pattern, tags, limit: limit ?? 100 });
         return rows.map((r: any) => ({
           key: r.key,
           value: r.value,
-          namespace: null,
-          tags: r.tags ? JSON.parse(r.tags) : [],
-          createdAt: r.created_at,
-          expiresAt: r.expires_at ?? null,
+          namespace: r.namespace || null,
+          tags: r.tags,
+          createdAt: r.createdAt,
+          expiresAt: r.expiresAt,
         }));
       },
 
       connectors: () => {
         if (!dbProxy) return [];
-        return dbProxy.listConnectors();
+        return dbProxy.list();
       },
     },
 
@@ -207,17 +206,15 @@ function buildResolvers(ctx: GraphQLContext) {
         return true;
       },
 
-      dbSet: (_: any, { key, value, ttl, ns, tags }: any) => {
+      dbSet: async (_: any, { key, value, ttl, ns, tags }: any) => {
         if (!sqliteAdapter) return false;
-        const fk = ns ? `${ns}\0${key}` : key;
-        sqliteAdapter.set(fk, value, ttl, tags);
+        await sqliteAdapter.set(key, value, { ttl, namespace: ns ?? "", tags });
         return true;
       },
 
-      dbDelete: (_: any, { key, ns }: any) => {
+      dbDelete: async (_: any, { key, ns }: any) => {
         if (!sqliteAdapter) return false;
-        const fk = ns ? `${ns}\0${key}` : key;
-        return sqliteAdapter.delete(fk);
+        return await sqliteAdapter.delete(key, ns ?? "");
       },
 
       proxyQuery: async (_: any, { connector, query, params, tags }: any) => {

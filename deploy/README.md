@@ -64,6 +64,65 @@ Optional ingress:
 kubectl apply -f deploy/k8s/ingress.example.yaml
 ```
 
+## Helm Chart
+
+Deploy using the Helm chart in `deploy/helm/dunena/`:
+
+```bash
+# Install with defaults
+helm install dunena deploy/helm/dunena/
+
+# Install with custom values
+helm install dunena deploy/helm/dunena/ \
+  --set image.tag=v0.4.0 \
+  --set persistence.size=10Gi \
+  --set config.maxEntries=500000 \
+  --set config.authToken=my-secret-token
+
+# Upgrade
+helm upgrade dunena deploy/helm/dunena/ --set image.tag=v0.5.0
+```
+
+See `deploy/helm/dunena/values.yaml` for all configurable values.
+
+## Terraform
+
+### AWS (ECS Fargate + EFS)
+
+```bash
+cd deploy/terraform/aws
+terraform init
+terraform plan -var="region=us-east-1"
+terraform apply
+```
+
+See `deploy/terraform/aws/README.md` for details.
+
+### GCP (Cloud Run + GCS)
+
+```bash
+cd deploy/terraform/gcp
+terraform init
+terraform plan -var="project_id=my-project"
+terraform apply -var="project_id=my-project"
+```
+
+See `deploy/terraform/gcp/README.md` for details.
+
+## AWS CloudFormation
+
+Deploy a single stack with ECS Fargate, ALB, and EFS:
+
+```bash
+aws cloudformation deploy \
+  --template-file deploy/cloudformation/dunena-stack.yaml \
+  --stack-name dunena \
+  --parameter-overrides \
+    VpcId=vpc-12345 \
+    SubnetIds=subnet-a,subnet-b \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
 ## Supported Deployment Modes
 
 | Mode | SQLite Safe? | Notes |
