@@ -1,6 +1,6 @@
 {
   "name": "dunena-cli",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "CLI client for the Dunena high-performance cache engine",
   "type": "module",
   "bin": {
